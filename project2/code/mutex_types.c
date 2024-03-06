@@ -78,8 +78,6 @@ void list_del_node(struct list_node_t *node, struct d_list_t **d_list) {
 
   (*d_list)->length--;
   DEBUG_OUT("Deallocating memory for thread node");
-  free(node->t_block->stack);
-  free(node->t_block);
   free(node);
 }
 

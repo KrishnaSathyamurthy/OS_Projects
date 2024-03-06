@@ -9,21 +9,24 @@
 
 #define STACK_SIZE 16 * 1024
 #define QUANTUM 10 * 1000 // 10 ms
+#ifdef MLFQ
+#define LONG_QUANTUM 100 // 100 s
+#endif
 
 static int is_init_scheduler = 0;
 
 tcb *current_worker = NULL;
 
-ucontext_t main_context, scheduler_context,
-    *scheduler_context_p = &scheduler_context;
+ucontext_t scheduler_context, *scheduler_context_p = &scheduler_context;
 scheduler *t_scheduler;
 
-// SCHEDULER VARIABLES
-struct sigaction sa;
-struct itimerval timer;
-
+struct sigaction short_signal;
+struct itimerval short_timer;
 struct sched_queue_t *urgent_p_queue;
+
 #ifdef MLFQ
+struct sigaction long_signal;
+struct itimerval long_timer;
 struct sched_queue_t *high_p_queue, *med_p_queue, *low_p_queue;
 #endif
 
@@ -78,26 +81,25 @@ int create_context(ucontext_t *context, void *thread_func, int argv,
 }
 
 int init_main_context() {
+  ucontext_t main_context;
   if (getcontext(&main_context) < 0) {
     DEBUG_OUT("Getcontext failed for scheduler");
     exit(FAILED_WCS);
   }
-  if (!is_init_scheduler) {
-    tcb *thread_block = malloc(sizeof(tcb));
-    thread_block->context = main_context;
-    thread_block->priority = URGENT_PRIORITY_T;
-    thread_block->status = READY_T;
+  tcb *thread_block = malloc(sizeof(tcb));
+  thread_block->context = main_context;
+  thread_block->priority = URGENT_PRIORITY_T;
+  thread_block->status = READY_T;
 
-    // to add the thread to main queue during swap context
-    thread_block->is_yield = 1;
-    thread_block->yield_cnt = 0;
-    is_init_scheduler = 1;
-    t_scheduler->thread_blocks = init_list(thread_block);
-    thread_block->t_id = (void *)t_scheduler->thread_blocks->tail;
-    DEBUG_OUT_ARG("Created main thread", thread_block->t_id);
-    current_worker = thread_block;
-    swapcontext(&main_context, scheduler_context_p);
-  }
+  // to add the thread to main queue during swap context
+  thread_block->is_yield = 1;
+  thread_block->yield_cnt = 0;
+  is_init_scheduler = 1;
+  t_scheduler->thread_blocks = init_list(thread_block);
+  thread_block->t_id = (void *)t_scheduler->thread_blocks->tail;
+  DEBUG_OUT_ARG("Created main thread", thread_block->t_id);
+  current_worker = thread_block;
+  swapcontext(&thread_block->context, scheduler_context_p);
   return SUCCESS_WCS;
 }
 
@@ -106,14 +108,24 @@ int init_scheduler() {
     return SUCCESS_WCS;
   }
   DEBUG_OUT("STARTING SCHEDULER...");
-
   init_scheduler_queue();
 
   // configuring signal handler for the scheduler
   // additional timer for changing all threads to common queue still pending...
-  memset(&sa, 0, sizeof(sa));
-  sa.sa_handler = &timer_sig_handler;
-  sigaction(SIGPROF, &sa, NULL);
+  memset(&short_signal, 0, sizeof(short_signal));
+  short_signal.sa_handler = &timer_sig_handler;
+  sigaction(SIGPROF, &short_signal, NULL);
+
+#ifdef MLFQ
+  memset(&long_signal, 0, sizeof(long_signal));
+  long_signal.sa_handler = &timer_sig_handler;
+  sigaction(SIGVTALRM, &long_signal, NULL);
+  long_timer.it_interval.tv_usec = 0;
+  long_timer.it_interval.tv_sec = LONG_QUANTUM;
+  long_timer.it_value.tv_usec = 0;
+  long_timer.it_value.tv_sec = LONG_QUANTUM;
+  setitimer(ITIMER_VIRTUAL, &long_timer, NULL);
+#endif
 
   if ((t_scheduler = malloc(sizeof(scheduler))) == 0) {
     DEBUG_OUT("Error while allocating scheduler memory ");
@@ -130,11 +142,12 @@ int init_scheduler() {
 }
 
 void run_thread(void(*func(void *)), void *arg) {
+  DEBUG_OUT_ARG("Executing thread...", current_worker->t_id);
   current_worker->status = RUNNING_T;
-  DEBUG_OUT_ARG("Executing thread", current_worker->t_id);
   func(arg);
   current_worker->status = TERMINATING_T;
-  worker_yield();
+  DEBUG_OUT_ARG("Terminating thread...", current_worker->t_id);
+  setcontext(scheduler_context_p);
 }
 
 int worker_create(worker_t *thread, pthread_attr_t *attr,
@@ -174,7 +187,7 @@ int worker_yield() {
 void worker_exit(void *value_ptr) {
   current_worker->ret_val = value_ptr;
   current_worker->status = TERMINATING_T;
-  swapcontext(&current_worker->context, scheduler_context_p);
+  setcontext(scheduler_context_p);
 }
 
 int worker_join(worker_t thread, void **value_ptr) {
@@ -188,6 +201,8 @@ int worker_join(worker_t thread, void **value_ptr) {
     (*value_ptr) = node->t_block->ret_val;
   }
   DEBUG_OUT_ARG("Terminating user thread", node->t_block->t_id);
+  free(node->t_block->stack);
+  free(node->t_block);
   list_del_node(node, &t_scheduler->thread_blocks);
   return 0;
 };
@@ -209,17 +224,19 @@ int worker_mutex_init(worker_mutex_t *mutex,
 
 /* aquire the mutex lock */
 int worker_mutex_lock(worker_mutex_t *mutex) {
-  if (__atomic_test_and_set(&mutex->mutex_lock, LOCKED_T) == 0) {
-    DEBUG_OUT("Mutex lock has been acquired");
-    return 0;
-  }
+  while (1) {
+    if (__atomic_test_and_set(&mutex->mutex_lock, LOCKED_T) == 0) {
+      DEBUG_OUT("Mutex lock has been acquired");
+      return 0;
+    }
 
-  while (__atomic_test_and_set(&mutex->list_lock, LOCKED_T) == 0) {
-  };
-  current_worker->status = WAITING_T; // Adding worker to block list
-  list_add_tail(current_worker, &mutex->block_list);
-  __sync_lock_release(&mutex->list_lock);
-  return 0;
+    while (__atomic_test_and_set(&mutex->list_lock, LOCKED_T) == 0) {
+    };
+    current_worker->status = WAITING_T; // Adding worker to block list
+    list_add_tail(current_worker, &mutex->block_list);
+    __sync_lock_release(&mutex->list_lock);
+    swapcontext(&current_worker->context, scheduler_context_p);
+  }
 };
 
 void enqueue_blocked_nodes(list_node_t *node) {
@@ -271,6 +288,44 @@ int worker_mutex_destroy(worker_mutex_t *mutex) {
   return 0;
 };
 
+#ifdef MLFQ
+void move_threads_urgent(sched_queue_t *queue) {
+  if (queue->head) {
+    while (queue->head) {
+      tcb *thread_block = queue_t_dequeue(queue);
+      thread_block->priority = URGENT_PRIORITY_T;
+      queue_t_enqueue(thread_block, urgent_p_queue);
+    }
+  }
+}
+
+void mlfq_all_threads_urgent() {
+  // timer stopped temporarily till the threads are moved to urgent queue
+  short_timer.it_value.tv_usec = 0;
+  short_timer.it_value.tv_sec = 0;
+  setitimer(ITIMER_PROF, &short_timer, NULL);
+  move_threads_urgent(high_p_queue);
+  move_threads_urgent(med_p_queue);
+  move_threads_urgent(low_p_queue);
+
+  // Timer configured to continue switching...
+  swapcontext(&current_worker->context, scheduler_context_p);
+}
+#endif
+
+void timer_sig_handler(int signum) {
+#ifdef RR
+  swapcontext(&current_worker->context, scheduler_context_p);
+#else
+  if (signum == SIGPROF) {
+    swapcontext(&current_worker->context, scheduler_context_p);
+  } else if (signum == SIGVTALRM) {
+    DEBUG_OUT("MLFQ long alarm called, making all threads urgent");
+    mlfq_all_threads_urgent();
+  }
+#endif
+}
+
 /* scheduler */
 static void schedule() {
 #ifndef MLFQ
@@ -280,16 +335,16 @@ static void schedule() {
 #endif
 }
 
-static void swap_threads(struct sched_queue_t *queue) {
-  if (queue->head) {
+static void swap_threads(struct sched_queue_t **queue) {
+  if ((*queue)->head) {
     // dequeue the head and schedule the thread
-    current_worker = queue_t_dequeue(queue);
-    current_worker->status = SCHEDULED_T;
+    current_worker = queue_t_dequeue(*queue);
+    current_worker->status = RUNNING_T;
 
     // Configure the timer to expire after the quantum time slice
-    timer.it_value.tv_usec = QUANTUM;
-    timer.it_value.tv_sec = 0;
-    setitimer(ITIMER_PROF, &timer, NULL);
+    short_timer.it_value.tv_usec = QUANTUM;
+    short_timer.it_value.tv_sec = 0;
+    setitimer(ITIMER_PROF, &short_timer, NULL);
 
     // swap to the thread
     DEBUG_OUT_ARG("Swapping threads...", current_worker->t_id);
@@ -299,8 +354,10 @@ static void swap_threads(struct sched_queue_t *queue) {
 
 // Preemptive RR scheduling algorithm
 static void sched_rr() {
-  queue_t_enqueue(current_worker, urgent_p_queue);
-  swap_threads(urgent_p_queue);
+  if (current_worker->status & (READY_T | RUNNING_T)) {
+    queue_t_enqueue(current_worker, urgent_p_queue);
+  }
+  swap_threads(&urgent_p_queue);
 }
 
 #ifdef MLFQ
@@ -309,23 +366,24 @@ void mlfq_schedule() {
    * 1. Among same priority threads, perform RR between each other
    * 2. Executes a queue only if the previous higher queue is empty.
    */
-  if (urgent_p_queue->head != NULL) {
-    swap_threads(urgent_p_queue);
-  } else if (high_p_queue->head != NULL) {
-    swap_threads(high_p_queue);
-  } else if (med_p_queue->head != NULL) {
-    swap_threads(med_p_queue);
-  } else if (low_p_queue->head != NULL) {
-    swap_threads(low_p_queue);
+  if (urgent_p_queue->head) {
+    swap_threads(&urgent_p_queue);
+  } else if (high_p_queue->head) {
+    swap_threads(&high_p_queue);
+  } else if (med_p_queue->head) {
+    swap_threads(&med_p_queue);
+  } else if (low_p_queue->head) {
+    swap_threads(&low_p_queue);
   }
 }
 
 // Preemptive MLFQ scheduling algorithm
 static void sched_mlfq() {
-  if (current_worker->status & TERMINATING_T) {
+  if (current_worker->status & (WAITING_T | TERMINATING_T)) {
     mlfq_schedule();
     return;
   }
+
   priority_t priority = current_worker->priority;
   int is_yield_thread = 0;
   if (current_worker->is_yield == 1) {
@@ -337,37 +395,26 @@ static void sched_mlfq() {
   }
   current_worker->is_yield = 0;
 
-  if (is_yield_thread && (current_worker->status & (READY_T | RUNNING_T))) {
+  if (is_yield_thread) {
+
     // If the current thread yielded retain in the same priority queue
-    switch (priority) {
-    case URGENT_PRIORITY_T:
-      queue_t_enqueue(current_worker, urgent_p_queue);
-      break;
-    case HIGH_PRIORITY_T:
+    if (priority & HIGH_PRIORITY_T) {
       queue_t_enqueue(current_worker, high_p_queue);
-      break;
-    case MEDIUM_PRIORITY_T:
+    } else if (priority & MEDIUM_PRIORITY_T) {
       queue_t_enqueue(current_worker, med_p_queue);
-      break;
-    case LOW_PRIORITY_T:
+    } else if (priority & LOW_PRIORITY_T) {
       queue_t_enqueue(current_worker, low_p_queue);
-      break;
-    default:
+    } else {
       queue_t_enqueue(current_worker, urgent_p_queue);
     }
   } else {
-    switch (priority) {
-    case HIGH_PRIORITY_T:
+    if (priority & HIGH_PRIORITY_T) {
       current_worker->priority = MEDIUM_PRIORITY_T;
       queue_t_enqueue(current_worker, med_p_queue);
-      break;
-    case MEDIUM_PRIORITY_T:
-    case LOW_PRIORITY_T:
+    } else if (priority & (MEDIUM_PRIORITY_T | LOW_PRIORITY_T)) {
       current_worker->priority = LOW_PRIORITY_T;
       queue_t_enqueue(current_worker, low_p_queue);
-      break;
-    case URGENT_PRIORITY_T:
-    default:
+    } else {
       current_worker->priority = HIGH_PRIORITY_T;
       queue_t_enqueue(current_worker, high_p_queue);
     }
@@ -375,7 +422,3 @@ static void sched_mlfq() {
   mlfq_schedule();
 }
 #endif
-
-void timer_sig_handler(int signum) {
-  swapcontext(&current_worker->context, scheduler_context_p);
-}

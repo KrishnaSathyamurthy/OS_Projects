@@ -23,8 +23,7 @@ typedef enum status_t {
   WAITING_T = 1,
   READY_T = 2,
   RUNNING_T = 4,
-  TERMINATING_T = 8,
-  SCHEDULED_T = 16
+  TERMINATING_T = 8
 } status_t;
 
 typedef enum priority_t {

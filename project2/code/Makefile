@@ -8,14 +8,13 @@ else
     IS_COMPILE = 0
 endif
 # DEBUG_TL, INFO_TL, NONE
-LOG_LEVEL = DEBUG_TL
+LOG_LEVEL = INFO_TL
 
 # Compiler options
 CC = gcc
 CFLAGS = -g -c
 AR = ar -rc
 RANLIB = ranlib
-
 
 all: clean thread-worker.a
 

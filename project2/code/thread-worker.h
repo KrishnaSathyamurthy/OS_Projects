@@ -2,34 +2,28 @@
 // List all group member's name:
 // username of iLab:
 // iLab Server:
-#ifdef __APPLE__
-#define _XOPEN_SOURCE
-#endif
-
 #ifndef WORKER_T_H
 #define WORKER_T_H
 
 #define _GNU_SOURCE
 
 #include "scheduler.h"
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/syscall.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <time.h>
 #include <ucontext.h>
 #include <unistd.h>
-#include <sys/types.h>
-#include <sys/time.h>
-#include <signal.h>
-#include <time.h>
-
-
 
 typedef enum worker_ret_status {
+  SUCCESS_WCS = -1,
   FAILED_WCS = 0,
-  SUCCESS_WCS = 1,
-  LIMIT_REACHED_WCS = 2,
-  MALLOC_FAILURE_WCS = 3,
-  NO_THREADS_CREATED_WCS = 4
+  LIMIT_REACHED_WCS = 1,
+  MALLOC_FAILURE_WCS = 2,
+  NO_THREADS_CREATED_WCS = 3
 } worker_status;
 
 /* create a new thread */

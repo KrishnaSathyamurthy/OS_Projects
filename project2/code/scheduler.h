@@ -1,22 +1,46 @@
 #include "mutex_types.h"
 
-typedef enum scheduler_type { FIFO_ST = 0 } scheduler_type;
+typedef struct q_node_t {
+  tcb *thread_block;
+  struct q_node_t *next;
+} q_node_t;
+
+typedef struct sched_queue_t {
+  q_node_t *head;
+  q_node_t *tail;
+} sched_queue_t;
 
 typedef struct scheduler {
-  tcb tcb_list[MAX_THREAD_COUNT];
-  scheduler_type s_type;
+  d_list_t *thread_blocks;
+
+  // this can be used to ensure the thread_blocks are a thread safe operation as
+  // well...
+  // int scheduler_lock;
+
+  // TODO : Check how you can concat multiple queues to a single queue
+  // struct sched_queue_t **multi_queue;
 } scheduler;
 
-void init_scheduler();
+/*
+ * exits process if sufficient memory is not present to allocate for its
+ * scheduler or its queues
+ */
+int init_scheduler();
+static void schedule();
+static void swap_thread(struct sched_queue_t *queue);
+static void sched_rr();
+static void sched_mlfq();
 
 void run_thread(void(*func(void *)), void *arg);
 void swap_thread();
 void delete_thread();
 
+/* SCHEDULER QUEUE */
+void queue_t_enqueue(struct tcb *t_block, struct sched_queue_t *queue);
+tcb *queue_t_dequeue(struct sched_queue_t *queue);
+
 /* SCHEDULER FUNCTIONS */
-void timer_sig_handler(int signum);
-void queue_enqueue(worker_t new_thread, queue *queue);
-void free_thread_memory(worker_t thread);
-static void sched_rr(queue *queue);
+static void sched_rr();
 static void sched_mlfq();
 static void schedule();
+void timer_sig_handler(int signum);

@@ -9,14 +9,32 @@
 
 #include "thread_worker_types.h"
 
-typedef struct spinlock_t {
+#define LOCKED_T 1
+#define UNLOCKED_T 0
 
-} spinlock_t;
+#define atomic_t int
 
-/* mutex struct definition */
+typedef struct list_node_t {
+  struct tcb *t_block;
+  struct list_node_t *next;
+  struct list_node_t *prev;
+} list_node_t;
+
+typedef struct d_list_t {
+  struct list_node_t *head;
+  // struct list_node_t *current; // is this necessary?
+  struct list_node_t *tail;
+  int length;
+} d_list_t;
+
 typedef struct worker_mutex_t {
-  tcb wait_list[MAX_THREAD_COUNT];
-
+  atomic_t mutex_lock;
+  d_list_t *block_list;
+  atomic_t list_lock;
 } worker_mutex_t;
+
+struct d_list_t *init_list(struct tcb *data);
+struct list_node_t *list_add_tail(struct tcb *data, struct d_list_t **d_list);
+void list_del_node(struct list_node_t *data, struct d_list_t **d_list);
 
 #endif

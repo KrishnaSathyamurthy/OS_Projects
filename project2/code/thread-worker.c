@@ -230,7 +230,7 @@ int worker_mutex_lock(worker_mutex_t *mutex) {
       return 0;
     }
 
-    while (__atomic_test_and_set(&mutex->list_lock, LOCKED_T) == 0) {
+    while (__atomic_test_and_set(&mutex->list_lock, LOCKED_T) == 1) {
     };
     current_worker->status = WAITING_T; // Adding worker to block list
     list_add_tail(current_worker, &mutex->block_list);
@@ -265,7 +265,7 @@ void enqueue_blocked_nodes(list_node_t *node) {
 }
 
 int worker_mutex_unlock(worker_mutex_t *mutex) {
-  while (__atomic_test_and_set(&mutex->list_lock, LOCKED_T) == 0) {
+  while (__atomic_test_and_set(&mutex->list_lock, LOCKED_T) == 1) {
   };
   DEBUG_OUT("Mutex unlock invoked");
   while (mutex->block_list->length) {

@@ -3,6 +3,8 @@ CFLAGS = -g -c -m32
 AR = ar -rc
 RANLIB = ranlib
 
+all: my_vm.a
+
 my_vm.a: my_vm.o
 	$(AR) $@ $^
 	$(RANLIB) $@

@@ -520,18 +520,30 @@ int get_value(unsigned int vp, void *dst, size_t n){
 }
 
 void mat_mult(unsigned int a, unsigned int b, unsigned int c, size_t l, size_t m, size_t n){
-    //TODO: Finish
-    int value_a, value_b, sum;
-    for (size_t i=0; i < l; i++) {
-        for(size_t j =0; j < n; j ++) {
-            sum = 0;
-            for (size_t k = 0; k < m; k++) {
-                get_value(a+i * m+k, &value_a, sizeof(int));
-                get_value(b+k * n+j, &value_b , sizeof(int));
+    
+    int value_a, value_b, value_c;
+    unsigned int address_a, address_b, address_c;
+    int value_size = sizeof(int);
 
-                sum += value_a * value_b;
+    for (size_t i = 0; i < l; i++) {
+        
+        for(size_t j = 0; j < n; j++) {
+            
+            value_c = 0;
+            
+            for (size_t k = 0; k < m; k++) {
+                
+                address_b = b + (j * value_size) + ((k * n * value_size));
+                address_a = a + (k * value_size) + ((i * m * value_size));
+
+                get_value(address_b, &value_b, value_size);
+                get_value(address_a, &value_a, value_size);
+                
+                value_c += value_a * value_b;
             }
-            put_value(c+i * n+j, &sum, sizeof(int));
+            
+            address_c = c + ((i * n * value_size)) + (j * value_size);
+            put_value(address_c, &value_c, value_size);
         }
     }
 }

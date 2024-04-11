@@ -432,94 +432,93 @@ int t_free(unsigned int vp, size_t n) {
 }
 
 int access_memory(unsigned int vp, void *val, size_t n, bool is_put) {
-    // Doing this to fetch/update data bytewise
-    char *physical_address = (char *)memory_manager.physical_memory[(page_t)translate(vp)].page_array;
+  // Doing this to fetch/update data bytewise
+  char *physical_address =
+      (char *)memory_manager.physical_memory[(page_t)translate(vp)].page_array;
 
-    char *virtual_address = (char *)vp;
-    char *end_virt_address = virtual_address + n;
+  char *virtual_address = (char *)vp;
+  char *end_virt_address = virtual_address + n;
 
-	page_t vp_first = (page_t)virtual_address >> offset_bits;
-	page_t vp_last = (page_t)end_virt_address >> offset_bits;
+  page_t vp_first = (page_t)virtual_address >> offset_bits;
+  page_t vp_last = (page_t)end_virt_address >> offset_bits;
 
-    char *value = (char *)val;
+  char *value = (char *)val;
 
-	for(page_t i = vp_first; i <= vp_last; i++) {
+  for (page_t i = vp_first; i <= vp_last; i++) {
 
-		int bit = get_bit_at_index(memory_manager.virtual_bitmap, i);
+    int bit = get_bit_at_index(memory_manager.virtual_bitmap, i);
 
-		if (bit == 0) {
-			return -1;
-		}
-	}
-
-    for (int i = 0; i < n; i++) {
-        
-        if (is_put) {
-            *physical_address = *value;
-        } else {
-            *value = *physical_address;
-        }
-
-        value++;
-        physical_address++;
-        virtual_address++;
-
-        
-        page_t virt_addr = (page_t)virtual_address;
-		
-        int outer_bits_mask = (1 << offset_bits);
-        outer_bits_mask -= 1;
-        int offset = virt_addr & outer_bits_mask;
-
-        if (offset == 0)
-        {
-			physical_address = (char *)memory_manager.physical_memory[(page_t)translate(virt_addr)].page_array;
-        }
+    if (bit == 0) {
+      return -1;
     }
-    
-    return 0;
+  }
 
+  for (int i = 0; i < n; i++) {
+
+    if (is_put) {
+      *physical_address = *value;
+    } else {
+      *value = *physical_address;
+    }
+
+    value++;
+    physical_address++;
+    virtual_address++;
+
+    page_t virt_addr = (page_t)virtual_address;
+
+    int outer_bits_mask = (1 << offset_bits);
+    outer_bits_mask -= 1;
+    int offset = virt_addr & outer_bits_mask;
+
+    if (offset == 0) {
+      physical_address =
+          (char *)memory_manager.physical_memory[(page_t)translate(virt_addr)]
+              .page_array;
+    }
+  }
+
+  return 0;
 }
 
 int put_value(unsigned int vp, void *val, size_t n) {
 
-    return access_memory(vp, val, n, true);
-
+  return access_memory(vp, val, n, true);
 }
 
-int get_value(unsigned int vp, void *dst, size_t n){
+int get_value(unsigned int vp, void *dst, size_t n) {
 
-    return access_memory(vp, dst, n, false);
-
+  return access_memory(vp, dst, n, false);
 }
 
-void mat_mult(unsigned int a, unsigned int b, unsigned int c, size_t l, size_t m, size_t n){
-    
-    int value_a, value_b, value_c;
-    unsigned int address_a, address_b, address_c;
-    int value_size = sizeof(int);
+void mat_mult(unsigned int a, unsigned int b, unsigned int c, size_t l,
+              size_t m, size_t n) {
 
-    for (size_t i = 0; i < l; i++) {
-        
-        for(size_t j = 0; j < n; j++) {
-            
-            value_c = 0;
-            
-            for (size_t k = 0; k < m; k++) {
-                
-                address_b = b + (j * value_size) + ((k * n * value_size));
-                address_a = a + (k * value_size) + ((i * m * value_size));
+  int value_a, value_b, value_c;
+  unsigned int address_a, address_b, address_c;
+  int value_size = sizeof(int);
 
-                get_value(address_b, &value_b, value_size);
-                get_value(address_a, &value_a, value_size);
-                
-                value_c += value_a * value_b;
-            }
-            
-            address_c = c + ((i * n * value_size)) + (j * value_size);
-            put_value(address_c, &value_c, value_size);
-        }
+  for (size_t i = 0; i < l; i++) {
+
+    for (size_t j = 0; j < n; j++) {
+
+      value_c = 0;
+
+      for (size_t k = 0; k < m; k++) {
+
+        address_b = b + (j * value_size) + ((k * n * value_size));
+        address_a = a + (k * value_size) + ((i * m * value_size));
+
+        get_value(address_b, &value_b, value_size);
+        get_value(address_a, &value_a, value_size);
+
+        value_c += value_a * value_b;
+      }
+
+      address_c = c + ((i * n * value_size)) + (j * value_size);
+      put_value(address_c, &value_c, value_size);
     }
+  }
 }
 
 void add_TLB(unsigned int vpage, unsigned int ppage) {
@@ -549,5 +548,5 @@ int remove_TLB(unsigned int vpage) {
 
 void print_TLB_missrate() {
   float miss_rate = mem_lookup.tlb_misses / mem_lookup.tlb_lookup;
-  printf("The TLB miss rate is, %.6f", miss_rate);
+  printf("The TLB miss rate is, %.6f\n", miss_rate);
 }

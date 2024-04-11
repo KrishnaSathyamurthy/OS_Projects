@@ -5,12 +5,18 @@ bool init = false;
 
 vm_manager memory_manager;
 
-// Number of physical pages
-unsigned long total_physical_pages = (MEMSIZE)/(PAGE_SIZE);
-
-//Number of virtual pages
+//Total number of virtual pages
 unsigned long long total_virtual_pages = (MAX_MEMSIZE)/(PAGE_SIZE);
 
+// Total of physical pages
+unsigned long total_physical_pages = (MEMSIZE)/(PAGE_SIZE);
+
+
+/*
+  This function initializes the virtual address bits, which will be
+  utilized to layout the virtual memory address and map with
+  its physical counter
+ */
 void assign_virtual_page_bits() {
 
     offset_bits = log2(PAGE_SIZE);
@@ -22,6 +28,11 @@ void assign_virtual_page_bits() {
     inner_level_bits = (virtual_page_bits - outer_level_bits);
 }
 
+/*
+  The method takes the pointer to bit_map pointer (address of the bitmap
+  pointer), to allocate memory for virtual and physical page wise. The total_pages
+  varies for both the space.
+ */
 void bitmap_init(bitmap **bit_map, size_t total_pages) {
     
     *bit_map = (bitmap *)malloc(sizeof(bitmap));
@@ -46,6 +57,11 @@ void bitmap_init(bitmap **bit_map, size_t total_pages) {
     }
 }
 
+/*
+  The following methods are crucial to memory availability by performing
+  bit operations over page bitmaps. Everytime memory is allocated/deallocated,
+  these functions are executed to ensure the memory availability is intact
+ */
 static void set_bit_at_index(bitmap *bit_map, int bit_index) {
     bit_map->bits[bit_index / BYTES_TO_BITS] |= (1 << (bit_index % BYTES_TO_BITS));
 }
@@ -54,10 +70,16 @@ static int get_bit_at_index(bitmap *bit_map, int bit_index) {
     return (bit_map->bits[bit_index / 8] & (1 << (bit_index % 8))) != 0;
 }
 
-void reset_bit_at_index(bitmap *bit_map, size_t index) {
-    bit_map->bits[index / 8] &= ~(1 << (index % 8));
+static void reset_bit_at_index(bitmap *bit_map, int bit_index) {
+    bit_map->bits[bit_index / 8] &= ~(1 << (bit_index % 8));
 }
+/* Ends here*/
 
+/*
+  Outer page directory that maps outer level index to its
+  inner level counterpart is initiated in the last page of the
+  physical memory.
+ */
 void init_page_directories() {
 	
     int bit_index = (total_physical_pages - 1);
@@ -68,12 +90,15 @@ void init_page_directories() {
 	page_t *page_dr_array = (memory_manager.page_directory)->page_array;
 
 	for(int i = 0; i < (1 << outer_level_bits); i++) {
+        // Initiating to -1, stating that any mapping hasn't begun
         page_dr_array[i] = -1;
     }
 	
 }
 
-
+/*
+  Init method for the VM system
+ */
 void initialize_vm() {
     
     if (init == true) {
@@ -87,7 +112,10 @@ void initialize_vm() {
     init = true;
 }
 
-
+/*
+  Allocates memory for physical space, and the bitmaps for virtual and
+  the physical pages
+ */
 void set_physical_mem() {
     
     memory_manager.physical_memory = (page *)malloc(MEMSIZE);
@@ -103,6 +131,11 @@ void set_physical_mem() {
 }
 
 // Need changes here
+/*
+  Crucial in computing the data for a given virtual address,
+  Deriving inner, outer index, offset and virtual page number
+  Which will be resourceful for page_map and translate methods
+ */
 void get_virtual_data(page_t vp, virtual_page_data *vir_page_data) {
     
     page_t offset_mask = (1 << offset_bits);
@@ -125,12 +158,17 @@ void get_virtual_data(page_t vp, virtual_page_data *vir_page_data) {
 
 }
 
+/*
+  Takes the virtual address, looks up the page directory,
+  Finds the corresponding inner table that is mapped,
+  dereferences the physical address through inner index from the table
+  and returns
+ */
 void * translate(page_t vp) {
 
     virtual_page_data virtual_data;
     get_virtual_data(vp, &virtual_data);
 
-    // Verifies if the bit is already allocated
     int bit = get_bit_at_index(memory_manager.virtual_bitmap, virtual_data.virtual_page_number);
     
     if (bit != 1) {
@@ -139,19 +177,22 @@ void * translate(page_t vp) {
 
     page_t *inner_page_table = (memory_manager.page_directory + virtual_data.outer_index);
 
-    // Calculate inner level address
     page_t *inner_page_table_address = &memory_manager.physical_memory[*inner_page_table];
     
-    // Pick the entry
     page_t *page_table_entry = (inner_page_table_address + virtual_data.inner_index);
 
-    // Finally, the physical page address + offset gives the corresponding physical address for passed virtual address
     page_t physical_address = (*page_table_entry + virtual_data.offset);
 
     return (void *)physical_address;
     
 }
 
+/*
+   Called in t_malloc(), to map the physical and the virtual address,
+   by making an entry in the page table(s). From virtual_data method, we 
+   find out the page directory entry, map a new inner table if not already present
+   Reference the physical address into the inner table index.
+ */
 void page_map(page_t vp, page_t pf) {
     
     virtual_page_data virtual_data;
@@ -188,17 +229,19 @@ void page_map(page_t vp, page_t pf) {
 
     page_t inner_level_page_table = *page_directory_entry;
 
-    // Compute address of inner page table
     page_t *inner_page_table_address = &memory_manager.physical_memory[inner_level_page_table];
 
     page_t *page_table_entry = (inner_page_table_address + virtual_data.inner_index);
-		
-    // Store the ppn into the page table entry.
+
     *page_table_entry = physical_frame_number;
 }
 
-
-// Need to change this
+// Need to change
+/*
+   Parses through the virtual space, and tries to find contiguous memory
+   based on the no_of_pages which is required. Finds empty pages through
+   virtual bitmaps and returns the starting page of the page bundle.
+ */
 page_t get_next_avail(int no_of_pages) {
 
     int start_page, vp_y, vp_x = 0;
@@ -237,7 +280,14 @@ page_t get_next_avail(int no_of_pages) {
     return -1;
 }
 
-
+/*
+   The memory allocator function:
+   Based on the size which is parsed, finds out the number of pages required.
+   Parses the physical memory for non-contiguous pages and virtual for 
+   contiguous pages. Each corresponding page is allocated for the process 
+   and page_map is called to map the VA and PA in the page tables. Finally it
+   returns the virtual_address that is being assigned.
+ */
 void * t_malloc(size_t n){
     
     initialize_vm();
@@ -249,8 +299,8 @@ void * t_malloc(size_t n){
         no_of_pages++;
     }
 
-    // We create an array to store all the physical pages that are free that can be allocated
     int i = 0;
+    // We are using this array to consider all the physical pages
     int physical_frames[no_of_pages];
     int frame_count = 0;
 
@@ -266,7 +316,7 @@ void * t_malloc(size_t n){
         i++;
     }
 
-    // We have failed to find free physical pages that are required to alloacte a given memory
+    // No physical memory is found
     if(frame_count < no_of_pages)
     {
         return NULL;
@@ -286,13 +336,13 @@ void * t_malloc(size_t n){
         page_t page_virtual_addr = i << offset_bits;
         page_t frame_physical_addr = physical_frames[frame_count] << offset_bits;
 
+        page_map(page_virtual_addr, frame_physical_addr);
+
         set_bit_at_index(memory_manager.virtual_bitmap, i);
 
         set_bit_at_index(memory_manager.physical_bitmap, physical_frames[frame_count]);
 
         frame_count++;
-
-        page_map(page_virtual_addr, frame_physical_addr);
     }
 
     page_t virtual_address = start_page << offset_bits;
@@ -301,8 +351,14 @@ void * t_malloc(size_t n){
 
 }
 
+/*
+   Free memory allocation:
+   Takes the starting virtual address, and its size. Verifies if the virtual memory is
+   allocated prior, and for each page, finds out the corresponding physical address
+   from the page table using translate(). Using both VA and PA, the memory is deallocated
+   from the bitmaps respectively.
+ */
 int t_free(page_t vp, size_t n){
-    //TODO: Finish
 
     int no_of_pages = n / (PAGE_SIZE);
     int remainder_bytes = n % (PAGE_SIZE);
@@ -378,11 +434,11 @@ void print_TLB_missrate(){
     //TODO: Finish
 }
 
-int main() {
-    int size = (2 * (1<<13)) + 2;
-    int *p = t_malloc(size);
+// int main() {
+//     int size = (2 * (1<<13)) + 2;
+//     int *p = t_malloc(size);
 
-    t_free(p, size);
+//     t_free(p, size);
 
-    return 0;
-}
+//     return 0;
+// }

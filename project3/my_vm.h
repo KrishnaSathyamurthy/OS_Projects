@@ -33,15 +33,21 @@ int outer_level_bits = 0;
 int offset_bits = 0;
 int virtual_page_bits = 0;
 
+// Structure to represent each page(aka frame) in memory
 typedef struct {
     page_t page_array[PAGE_MEM_SIZE];
 } page;
 
+// Structure for page bitmap
+// Each char in bits will have 1byte(storing 8 pages bitwise)
 typedef struct {
     unsigned char *bits;
     size_t num_bytes;
 } bitmap;
 
+// VM manager struct that is responsible for holding
+// all the necessary data for the system to function
+// Page directory is where outer table entries are stored
 typedef struct {
     page *physical_memory;
     bitmap *physical_bitmap;
@@ -49,6 +55,7 @@ typedef struct {
     page *page_directory;
 } vm_manager;
 
+// For storing data related to virtual space for a process
 typedef struct {
     page_t outer_index;
     page_t inner_index;
@@ -65,6 +72,8 @@ static void set_bit_at_index(bitmap *bit_map, int bit_index);
 
 static int get_bit_at_index(bitmap *bit_map, int bit_index);
 
+static void reset_bit_at_index(bitmap *bit_map, int bit_index);
+
 void init_page_directories();
 
 void assign_virtual_page_bits();
@@ -76,6 +85,8 @@ void get_virtual_data(page_t vp, virtual_page_data *vir_page_data);
 void * translate(page_t vp);
 
 void page_map(page_t vp, page_t pf);
+
+page_t get_next_avail(int no_of_pages);
 
 void * t_malloc(size_t n);
 

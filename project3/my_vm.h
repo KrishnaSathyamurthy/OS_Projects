@@ -33,13 +33,37 @@ int outer_level_bits = 0;
 int offset_bits = 0;
 int virtual_page_bits = 0;
 
+typedef struct {
+    page_t page_array[PAGE_MEM_SIZE];
+} page;
+
+typedef struct {
+    unsigned char *bits;
+    size_t num_bytes;
+} bitmap;
+
+typedef struct {
+    page *physical_memory;
+    bitmap *physical_bitmap;
+    bitmap *virtual_bitmap;
+    page *page_directory;
+} vm_manager;
+
+typedef struct {
+    page_t outer_index;
+    page_t inner_index;
+    page_t offset;
+    page_t virtual_page_number;
+} virtual_page_data;
+
+
 void initialize_vm();
 
-bitmap* bitmap_init(size_t total_pages);
+void bitmap_init(bitmap **bit_map, size_t total_pages);
 
-static void set_bit_at_index(char *bit_map, int bit_index);
+static void set_bit_at_index(bitmap *bit_map, int bit_index);
 
-static int get_bit_at_index(char *bit_map, int bit_index);
+static int get_bit_at_index(bitmap *bit_map, int bit_index);
 
 void init_page_directories();
 
@@ -47,11 +71,11 @@ void assign_virtual_page_bits();
 
 void set_physical_mem();
 
-virtual_page_data* get_virtual_data(page_t vp);
+void get_virtual_data(page_t vp, virtual_page_data *vir_page_data);
 
 void * translate(page_t vp);
 
-page_t page_map(page_t vp, page_t pf);
+void page_map(page_t vp, page_t pf);
 
 void * t_malloc(size_t n);
 

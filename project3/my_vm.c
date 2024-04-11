@@ -427,7 +427,7 @@ int t_free(unsigned int vp, size_t n) {
 
     reset_bit_at_index(memory_manager.physical_bitmap, physical_page);
 
-    // Remove TLB entries here
+    remove_TLB(i);
   }
 }
 

@@ -431,142 +431,95 @@ int t_free(unsigned int vp, size_t n) {
   }
 }
 
+int access_memory(unsigned int vp, void *val, size_t n, bool is_put) {
+    // Doing this to fetch/update data bytewise
+    char *physical_address = (char *)memory_manager.physical_memory[(page_t)translate(vp)].page_array;
+
+    char *virtual_address = (char *)vp;
+    char *end_virt_address = virtual_address + n;
+
+	page_t vp_first = (page_t)virtual_address >> offset_bits;
+	page_t vp_last = (page_t)end_virt_address >> offset_bits;
+
+    char *value = (char *)val;
+
+	for(page_t i = vp_first; i <= vp_last; i++) {
+
+		int bit = get_bit_at_index(memory_manager.virtual_bitmap, i);
+
+		if (bit == 0) {
+			return -1;
+		}
+	}
+
+    for (int i = 0; i < n; i++) {
+        
+        if (is_put) {
+            *physical_address = *value;
+        } else {
+            *value = *physical_address;
+        }
+
+        value++;
+        physical_address++;
+        virtual_address++;
+
+        
+        page_t virt_addr = (page_t)virtual_address;
+		
+        int outer_bits_mask = (1 << offset_bits);
+        outer_bits_mask -= 1;
+        int offset = virt_addr & outer_bits_mask;
+
+        if (offset == 0)
+        {
+			physical_address = (char *)memory_manager.physical_memory[(page_t)translate(virt_addr)].page_array;
+        }
+    }
+    
+    return 0;
+
+}
+
 int put_value(unsigned int vp, void *val, size_t n) {
 
-  // Compute the physical address from virtual address using translate API
-  page_t physical_address = translate(vp);
+    return access_memory(vp, val, n, true);
 
-  // We will be putting the data byte wise, hence take below variables for
-  // that purpose
-  char *virt_addr = (char *)vp;
-  char *last_virt_addr = virt_addr + n;
-  char *phy_addr = (char *)physical_address;
-  char *value = (char *)val;
-
-  // Compute the corresponding VPN's
-  page_t vpn_first = (page_t)virt_addr >> offset_bits;
-  page_t vpn_last = (page_t)last_virt_addr >> offset_bits;
-
-  // Check if these are valid VPN's
-  for (page_t i = vpn_first; i <= vpn_last; i++) {
-
-    int bit = get_bit_at_index(memory_manager.virtual_bitmap, i);
-
-    if (bit == 0) {
-      return -1;
-    }
-  }
-
-  // Since all pages are valid, we start putting the value byte wise
-
-  page_t temp = 0;
-  while (temp < n) {
-
-    // Copy the value byte wise. This logic is similar to memcpy
-    // implementaion!!
-    *phy_addr = *value;
-
-    // Increment the pointers for remaining copy
-    temp++;
-    value++;
-    phy_addr++;
-    virt_addr++;
-
-    page_t vai = (page_t)virt_addr;
-
-    int outer_bits_mask = (1 << offset_bits);
-    outer_bits_mask -= 1;
-
-    int offset = vai & outer_bits_mask;
-
-    // if offset = 0 then we need to update the physical page by calling
-    // translate API again
-    if (offset == 0) {
-      // update the physical page
-      physical_address = translate(vai);
-      phy_addr = (char *)physical_address;
-    }
-  }
 }
 
-int get_value(unsigned int vp, void *dst, size_t n) {
+int get_value(unsigned int vp, void *dst, size_t n){
 
-  // Compute the physical address from virtual address using translate API
-  page_t physical_address = translate(vp);
+    return access_memory(vp, dst, n, false);
 
-  // We will be putting the data byte wise, hence take below variables for
-  // that purpose
-  char *virt_addr = (char *)vp;
-  char *last_virt_addr = virt_addr + n;
-  char *phy_addr = (char *)physical_address;
-  char *value = (char *)dst;
-
-  // Compute the corresponding VPN's
-  page_t vpn_first = (page_t)virt_addr >> offset_bits;
-  page_t vpn_last = (page_t)last_virt_addr >> offset_bits;
-
-  // Check if these are valid VPN's
-  for (int i = vpn_first; i <= vpn_last; i++) {
-    int bit = get_bit(memory_manager.virtual_bitmap, i);
-
-    if (bit == 0) {
-      return -1;
-    }
-  }
-
-  for (int i = 0; i < n; i++) {
-    // Copy the value from physical address byte wise
-    *value = *phy_addr;
-    // Increment the pointer for remaining copy
-    value++;
-    phy_addr++;
-    virt_addr++;
-
-    page_t vai = (page_t)virt_addr;
-
-    int outer_bits_mask = (1 << offset_bits);
-    outer_bits_mask -= 1;
-
-    int offset = vai & outer_bits_mask;
-
-    // if offset = 0 then we need to update the physical page by calling
-    // translate API again
-    if (offset == 0) {
-      // update the physical page
-      physical_address = translate(vai);
-      phy_addr = (char *)physical_address;
-    }
-  }
 }
 
-void mat_mult(unsigned int a, unsigned int b, unsigned int c, size_t l,
-              size_t m, size_t n) {
+void mat_mult(unsigned int a, unsigned int b, unsigned int c, size_t l, size_t m, size_t n){
+    
+    int value_a, value_b, value_c;
+    unsigned int address_a, address_b, address_c;
+    int value_size = sizeof(int);
 
-  int value_a, value_b, value_c;
-  unsigned int address_a, address_b, address_c;
-  int value_size = sizeof(int);
+    for (size_t i = 0; i < l; i++) {
+        
+        for(size_t j = 0; j < n; j++) {
+            
+            value_c = 0;
+            
+            for (size_t k = 0; k < m; k++) {
+                
+                address_b = b + (j * value_size) + ((k * n * value_size));
+                address_a = a + (k * value_size) + ((i * m * value_size));
 
-  for (size_t i = 0; i < l; i++) {
-
-    for (size_t j = 0; j < n; j++) {
-
-      value_c = 0;
-
-      for (size_t k = 0; k < m; k++) {
-
-        address_b = b + (j * value_size) + ((k * n * value_size));
-        address_a = a + (k * value_size) + ((i * m * value_size));
-
-        get_value(address_b, &value_b, value_size);
-        get_value(address_a, &value_a, value_size);
-
-        value_c += value_a * value_b;
-      }
-
-      address_c = c + ((i * n * value_size)) + (j * value_size);
-      put_value(address_c, &value_c, value_size);
+                get_value(address_b, &value_b, value_size);
+                get_value(address_a, &value_a, value_size);
+                
+                value_c += value_a * value_b;
+            }
+            
+            address_c = c + ((i * n * value_size)) + (j * value_size);
+            put_value(address_c, &value_c, value_size);
+        }
     }
-  }
 }
 
 void add_TLB(unsigned int vpage, unsigned int ppage) {

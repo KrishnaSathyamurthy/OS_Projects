@@ -100,6 +100,8 @@ void *t_malloc(size_t n);
 
 int t_free(unsigned int vp, size_t n);
 
+int access_memory(unsigned int vp, void *val, size_t n, bool is_put);
+
 int put_value(unsigned int vp, void *val, size_t n);
 
 int get_value(unsigned int vp, void *dst, size_t n);

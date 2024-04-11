@@ -98,16 +98,15 @@ page_t get_next_avail(int no_of_pages);
 
 void *t_malloc(size_t n);
 
-int t_free(unsigned int vp, size_t n);
+int t_free(page_t vp, size_t n);
 
-int access_memory(unsigned int vp, void *val, size_t n, bool is_put);
+int access_memory(page_t vp, void *val, size_t n, bool is_put);
 
-int put_value(unsigned int vp, void *val, size_t n);
+int put_value(page_t vp, void *val, size_t n);
 
-int get_value(unsigned int vp, void *dst, size_t n);
+int get_value(page_t vp, void *dst, size_t n);
 
-void mat_mult(unsigned int a, unsigned int b, unsigned int c, size_t l,
-              size_t m, size_t n);
+void mat_mult(page_t a, page_t b, page_t c, size_t l, size_t m, size_t n);
 
 void add_TLB(page_t vpage, page_t ppage);
 

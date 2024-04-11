@@ -1,4 +1,4 @@
-#include "my_vm.h"
+#include "my_vm64.h"
 #include <string.h>
 
 // TODO: Define static variables and structs, include headers, etc
@@ -13,8 +13,6 @@ unsigned long long total_virtual_pages = (MAX_MEMSIZE) / (PAGE_SIZE);
 // Total of physical pages
 unsigned long total_physical_pages = (MEMSIZE) / (PAGE_SIZE);
 
-int inner_level_bits = 0;
-int outer_level_bits = 0;
 int offset_bits = 0;
 int virtual_page_bits = 0;
 
@@ -24,14 +22,9 @@ int virtual_page_bits = 0;
   its physical counter
  */
 void assign_virtual_page_bits() {
-
   offset_bits = log2(PAGE_SIZE);
 
   virtual_page_bits = (ADDRESS_BIT - offset_bits);
-
-  outer_level_bits = log2(PAGE_MEM_SIZE);
-
-  inner_level_bits = (virtual_page_bits - outer_level_bits);
 }
 
 /*
@@ -92,8 +85,7 @@ void init_page_directories() {
 
   memory_manager.page_directory = &memory_manager.physical_memory[bit_index];
   page_t *page_dr_array = (memory_manager.page_directory)->page_array;
-  for (int i = 0; i < (1 << outer_level_bits); i++) {
-    // Initiating to -1, stating that any mapping hasn't begun
+  for (int i = 0; i < (1 << PAGE_VS_LEVEL); i++) {
     page_dr_array[i] = -1;
   }
 }
@@ -152,22 +144,19 @@ void set_physical_mem() {
   Which will be resourceful for page_map and translate methods
  */
 void get_virtual_data(page_t vp, virtual_page_data *vir_page_data) {
-
   page_t offset_mask = (1 << offset_bits);
   offset_mask -= 1;
   page_t offset = vp & offset_mask;
 
-  // Calculate the outer index
-  int total_bits = ADDRESS_BIT - outer_level_bits;
-  page_t outer_index = (vp >> total_bits);
-
   page_t virtual_page_number = (vp >> offset_bits);
-  page_t inner_bits_mask = (1 << inner_level_bits);
-  inner_bits_mask -= 1;
-  page_t inner_index = (virtual_page_number & inner_bits_mask);
-
-  vir_page_data->inner_index = inner_index;
-  vir_page_data->outer_index = outer_index;
+  int inner_data = virtual_page_number;
+  vir_page_data->indices[3] = inner_data & PAGE_VS_LEVEL;
+  inner_data = inner_data >> PAGE_VS_LEVEL;
+  vir_page_data->indices[2] = inner_data & inner_data;
+  inner_data = inner_data >> PAGE_VS_LEVEL;
+  vir_page_data->indices[1] = inner_data & inner_data;
+  inner_data = inner_data >> PAGE_VS_LEVEL;
+  vir_page_data->indices[0] = inner_data & inner_data;
   vir_page_data->virtual_page_number = virtual_page_number;
   vir_page_data->offset = offset;
 }
@@ -200,19 +189,17 @@ void *translate(page_t vp) {
     return NULL;
   }
 
-  page_t *inner_page_table =
-      (memory_manager.page_directory + virtual_data.outer_index);
-
-  page_t *inner_page_table_address =
-      &memory_manager.physical_memory[*inner_page_table];
-
-  page_t *page_table_entry =
-      (inner_page_table_address + virtual_data.inner_index);
-
-  add_TLB(virtual_data.virtual_page_number, *page_table_entry);
-
+  page_t *second_level =
+      memory_manager.page_directory + virtual_data.indices[0];
+  page_t *second_level_addr = &memory_manager.physical_memory[*second_level];
+  page_t *third_level = second_level_addr + virtual_data.indices[1];
+  page_t *third_level_addr = &memory_manager.physical_memory[*third_level];
+  page_t *fourth_level = third_level_addr + virtual_data.indices[2];
+  page_t *fourth_level_addr = &memory_manager.physical_memory[*fourth_level];
+  page_t *page_table = fourth_level_addr + virtual_data.indices[3];
+  add_TLB(virtual_data.virtual_page_number, *page_table);
   page_t physical_address =
-      ((*page_table_entry << offset_bits) + virtual_data.offset);
+      ((*page_table << offset_bits) + virtual_data.offset);
 
   return (void *)physical_address;
 }
@@ -229,41 +216,42 @@ void page_map(page_t vp, page_t pf) {
   get_virtual_data(vp, &virtual_data);
 
   page_t physical_frame_number = pf >> offset_bits;
+  page_t *page_directory_entry = memory_manager.page_directory;
 
-  page_t *page_directory_entry =
-      (memory_manager.page_directory + virtual_data.outer_index);
+  int i = 0;
+  while (i < 3) {
+    page_directory_entry = (page_directory_entry + virtual_data.indices[i]);
+    if (*page_directory_entry == -1) {
 
-  if (*page_directory_entry == -1) {
+      int last_page = total_physical_pages - 2;
 
-    int last_page = total_physical_pages - 2;
+      while (last_page >= 0) {
 
-    while (last_page >= 0) {
+        int bit = get_bit_at_index(memory_manager.physical_bitmap, last_page);
 
-      int bit = get_bit_at_index(memory_manager.physical_bitmap, last_page);
+        if (bit == 0) {
 
-      if (bit == 0) {
+          set_bit_at_index(memory_manager.physical_bitmap, last_page);
+          *page_directory_entry = last_page;
 
-        set_bit_at_index(memory_manager.physical_bitmap, last_page);
-        *page_directory_entry = last_page;
+          break;
+        }
 
-        break;
+        last_page--;
       }
 
-      last_page--;
+      if (*page_directory_entry == -1) {
+        return;
+      }
     }
-
-    if (*page_directory_entry == -1) {
-      return NULL;
-    }
+    i++;
   }
 
-  page_t inner_level_page_table = *page_directory_entry;
+  page_t fourth_level = *page_directory_entry;
 
-  page_t *inner_page_table_address =
-      &memory_manager.physical_memory[inner_level_page_table];
+  page_t *fourth_level_address = &memory_manager.physical_memory[fourth_level];
 
-  page_t *page_table_entry =
-      (inner_page_table_address + virtual_data.inner_index);
+  page_t *page_table_entry = (fourth_level_address + virtual_data.indices[3]);
 
   *page_table_entry = physical_frame_number;
 
@@ -492,7 +480,6 @@ int get_value(page_t vp, void *dst, size_t n) {
 }
 
 void mat_mult(page_t a, page_t b, page_t c, size_t l, size_t m, size_t n) {
-
   int value_a, value_b, value_c;
   unsigned int address_a, address_b, address_c;
   int value_size = sizeof(int);

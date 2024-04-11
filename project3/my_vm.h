@@ -1,3 +1,7 @@
+// List all group member's name: Abhinav Bharadwaj Sarathy, Krishna Sathyamurthy
+// username of iLab: ab2812, ks2025
+// iLab Server: kill.cs.rutgers.edu
+
 #include <math.h>
 #include <pthread.h>
 #include <stdbool.h>

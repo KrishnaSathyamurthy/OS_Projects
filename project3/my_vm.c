@@ -102,11 +102,12 @@ void set_physical_mem() {
     bitmap_init(&memory_manager.virtual_bitmap, total_virtual_pages);
 }
 
+// Need changes here
 void get_virtual_data(page_t vp, virtual_page_data *vir_page_data) {
     
     page_t offset_mask = (1 << offset_bits);
-    offset_mask -= 1; // 8191
-    page_t offset = vp & offset_mask; // 0
+    offset_mask -= 1;
+    page_t offset = vp & offset_mask;
 
     // Calculate the outer index
     int total_bits = ADDRESS_BIT - outer_level_bits;
@@ -144,11 +145,8 @@ void * translate(page_t vp) {
     // Pick the entry
     page_t *page_table_entry = (inner_page_table_address + virtual_data.inner_index);
 
-    // Get the physical address from the value in Page entry
-    page_t *physical_page_address = &(memory_manager.physical_memory[*page_table_entry]);
-
     // Finally, the physical page address + offset gives the corresponding physical address for passed virtual address
-    page_t *physical_address = (physical_page_address + virtual_data.offset);
+    page_t physical_address = (*page_table_entry + virtual_data.offset);
 
     return (void *)physical_address;
     
@@ -188,7 +186,7 @@ void page_map(page_t vp, page_t pf) {
         }
 	}
 
-    page_t inner_level_page_table = *page_directory_entry; // 1: 13070 2: 13070
+    page_t inner_level_page_table = *page_directory_entry;
 
     // Compute address of inner page table
     page_t *inner_page_table_address = &memory_manager.physical_memory[inner_level_page_table];
@@ -315,6 +313,10 @@ int t_free(page_t vp, size_t n){
 
     // Get the starting page from Virtual page/address
     page_t start_page = vp >> offset_bits;
+    
+    // NOTE: Ideally here, the offset should be stored especially when
+    // Fragmentation comes into picture, but since thats not the case
+    // we are not ignoring this.
 
     bool valid_page = true;
 
@@ -333,13 +335,15 @@ int t_free(page_t vp, size_t n){
         return -1;
     }
 
+    page_t virt_addr, phy_addr, physical_page;
+
     for(page_t i = start_page; i < (start_page + no_of_pages); i++)
     {
-        page_t virt_addr = (i << offset_bits);
+        virt_addr = (i << offset_bits);
 
-        page_t *phy_addr = translate(virt_addr);
+        phy_addr = translate(virt_addr);
 
-        page_t physical_page = (*phy_addr >> offset_bits);
+        physical_page = (phy_addr >> offset_bits);
 
         reset_bit_at_index(memory_manager.virtual_bitmap, i);
 
@@ -375,9 +379,10 @@ void print_TLB_missrate(){
 }
 
 int main() {
-    int *p = (int *)t_malloc(1<<14);
+    int size = (2 * (1<<13)) + 2;
+    int *p = t_malloc(size);
 
-    t_free(p, 1<<14);
+    t_free(p, size);
 
     return 0;
 }

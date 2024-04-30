@@ -274,6 +274,10 @@ void page_map(page_t vp, page_t pf) {
    Parses through the virtual space, and tries to find contiguous memory
    based on the no_of_pages which is required. Finds empty pages through
    virtual bitmaps and returns the starting page of the page bundle.
+
+   1. Can use __builtin_ctz / __builtin_clz to identify if the 8 pages are free
+   or not
+   2. how about using integer "map" instead of char "map"???
  */
 page_t get_next_avail(int no_of_pages) {
 

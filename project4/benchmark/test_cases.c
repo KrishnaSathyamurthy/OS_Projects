@@ -9,7 +9,7 @@
 #include <dirent.h>
 
 /* You need to change this macro to your TFS mount point*/
-#define TESTDIR "/tmp/mountdir"
+#define TESTDIR "/tmp/ab2812/mountdir"
 
 #define N_FILES 100
 #define BLOCKSIZE 4096
@@ -45,7 +45,7 @@ int main(int argc, char **argv) {
 			exit(1);
 		}
 	}
-	
+
 	fstat(fd, &st);
 	if (st.st_size != ITERS*BLOCKSIZE) {
 		printf("TEST 2: File write failure \n");
@@ -78,13 +78,13 @@ int main(int argc, char **argv) {
 		}
 		//printf("buf %s \n", buf);
 	}
-        
+
 	if (pread(fd, buf, BLOCKSIZE, 2*BLOCKSIZE) != BLOCKSIZE) {
 		perror("pread");
 		printf("TEST 4: File read failure \n");
 		exit(1);
 	}
-    
+
 	printf("TEST 4: File read Success \n");
 	close(fd);
 
@@ -111,7 +111,7 @@ int main(int argc, char **argv) {
 			exit(1);
 		}
 	}
-	
+
 	for (i = 0; i < N_FILES; ++i) {
 		DIR *dir;
 		char subdir_path[FSPATHLEN];
@@ -127,7 +127,7 @@ int main(int argc, char **argv) {
 	printf("TEST 7: Sub-directory create success \n");
 
 
-	/* Close operation */	
+	/* Close operation */
 	if (close(fd) < 0) {
 		perror("close largefile");
 		exit(1);

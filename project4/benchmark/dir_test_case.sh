@@ -9,13 +9,13 @@ done
 
 for i in `seq 1 $max`
 do
-    echo "remove $i"
+    echo "make inner $i"
     mkdir $CURR_HOME/mountdir/test_$i/test_$i
 done
 
 for i in `seq 1 $max`
 do
-    echo "remove $i"
+    echo "try remove $i"
     rmdir $CURR_HOME/mountdir/test_$i
 done
 

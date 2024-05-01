@@ -541,13 +541,13 @@ void set_end_count(char *local_time) {
     int old_block_count = total_block_count;
     int old_inode_count = total_inode_count;
     set_block_count(NULL);
-    log_stats("%s::TOTAL BLOCKS ISUSE AT CLOSE %d\n", local_time, old_block_count);
+    log_stats("%s::TOTAL BLOCKS ISUSE AT CLOSE %d\n", local_time, total_block_count);
 	if (total_block_count < old_block_count) {
 	   log_stats("%s::BLOCKS USAGE HAS REDUCED BY %d\n", local_time, old_block_count - total_block_count);
 	} else if (total_block_count > old_block_count) {
 	   log_stats("%s::BLOCKS USAGE HAS INCREASED BY %d\n", local_time, total_block_count - old_block_count);
 	}
-	log_stats("%s::TOTAL INODES ISUSE AT CLOSE %d\n", local_time, old_inode_count);
+	log_stats("%s::TOTAL INODES ISUSE AT CLOSE %d\n", local_time, total_inode_count);
     if (total_inode_count < old_inode_count) {
     log_stats("%s::INODES USAGE HAS REDUCED BY %d\n", local_time, old_inode_count - total_inode_count);
     } else if (total_inode_count > old_inode_count) {
@@ -765,27 +765,6 @@ static int rufs_rmdir(const char *path) {
         unset_block(c_inode.direct_ptr[i], dirent_dblock);
         c_inode.vstat.st_blocks--;
 	}
-
-    if (c_inode.vstat.st_blocks) {
-        int *indirect_blocks = (int*)malloc(BLOCK_SIZE);
-        int *startaddr_id = indirect_blocks;
-        for (int i = 0; i < 8 && c_inode.vstat.st_blocks; i++) {
-            if (c_inode.indirect_ptr[i] == 0) {
-                continue;
-            }
-
-            bio_read(c_inode.indirect_ptr[i], indirect_blocks);
-            for (int j = 0; j < max_indirect &&  c_inode.vstat.st_blocks; j++) {
-                unset_block(*indirect_blocks, dirent_dblock);
-                c_inode.vstat.st_blocks--;
-            }
-            indirect_blocks = startaddr_id;
-            memset(indirect_blocks, 0, BLOCK_SIZE);
-            unset_block(c_inode.indirect_ptr[i], indirect_blocks);
-            c_inode.vstat.st_blocks--;
-    	}
-        free(indirect_blocks);
-    }
 
     struct inode *upd_inode = (struct inode*)malloc(sizeof(struct inode));
     memset(upd_inode, 0, sizeof(struct inode));

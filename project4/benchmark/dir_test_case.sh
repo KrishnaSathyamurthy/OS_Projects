@@ -1,4 +1,4 @@
-max=20
+max=256
 CURR_HOME=/tmp/ks2025
 
 for i in `seq 1 $max`

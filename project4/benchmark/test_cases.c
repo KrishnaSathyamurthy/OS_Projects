@@ -7,22 +7,24 @@
 #include <string.h>
 #include <sys/types.h>
 #include <dirent.h>
+#include <time.h>
 
 /* You need to change this macro to your TFS mount point*/
-#define TESTDIR "/tmp/ab2812/mountdir"
+#define TESTDIR "/tmp/ks2025/mountdir"
 
-#define N_FILES 100
-#define BLOCKSIZE 4096
-#define FSPATHLEN 256
-#define ITERS 16
-#define ITERS_LARGE 2048
+/* Testing for UNEVEN HUGE VALUES... */
+#define N_FILES 512
+#define BLOCKSIZE 6144
+#define FSPATHLEN 256*4
+#define ITERS 16*4
+#define ITERS_LARGE 3072
 #define FILEPERM 0666
 #define DIRPERM 0755
 
 char buf[BLOCKSIZE];
 
 int main(int argc, char **argv) {
-
+    clock_t begin = clock();
 	int i, fd = 0, ret = 0;
 	struct stat st;
 
@@ -133,6 +135,8 @@ int main(int argc, char **argv) {
 		exit(1);
 	}
 
-	printf("Benchmark completed \n");
+	clock_t end = clock();
+	double time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
+	printf("Benchmark completed with time %f\n", time_spent);
 	return 0;
 }

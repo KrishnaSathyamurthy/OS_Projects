@@ -10,7 +10,7 @@
 #include <time.h>
 
 /* You need to change this macro to your TFS mount point*/
-#define TESTDIR "/tmp/ks2025/mountdir"
+#define TESTDIR "/tmp/ab2812/mountdir"
 
 /* Simple test case... */
 #define N_FILES 100

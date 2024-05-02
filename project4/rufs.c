@@ -246,6 +246,10 @@ int dir_add(struct inode dir_inode, uint16_t f_ino, const char *fname, size_t na
             log_msg("Going to add new dir on a new block...\n");
             memset(dirent_dblock, 0, BLOCK_SIZE);
             dir_inode.direct_ptr[i] = get_avail_blkno();
+            if (dir_inode.direct_ptr[i] == -1) {
+                break;
+            }
+
             dir_inode.vstat.st_blocks++;
             add_new_direc(&dirent_dblock, fname, name_len, 0, f_ino, dir_inode.direct_ptr[i]);
             update_dir_inode(&dir_inode);
@@ -276,6 +280,10 @@ int dir_add(struct inode dir_inode, uint16_t f_ino, const char *fname, size_t na
 				} else {
 					memset(dirent_dblock, 0, BLOCK_SIZE);
 					*indirect_blocks = get_avail_blkno();
+					if (*indirect_blocks == -1) {
+                        break;
+                    }
+
 				    log_msg("Going to add new dir in a new indirect block %d::%d at pos %d\n", dir_inode.indirect_ptr[i], *indirect_blocks, j);
 					dir_inode.vstat.st_blocks++;
 					add_new_direc(&dirent_dblock, fname, name_len, 0, f_ino, *indirect_blocks);
@@ -292,6 +300,10 @@ int dir_add(struct inode dir_inode, uint16_t f_ino, const char *fname, size_t na
 			memset(indirect_blocks, 0, BLOCK_SIZE);
 			dir_inode.indirect_ptr[i] = get_avail_blkno();
 			*indirect_blocks = get_avail_blkno();
+			if (dir_inode.indirect_ptr[i] == -1 || *indirect_blocks == -1) {
+			    break;
+			}
+
 		    log_msg("Going to add new dir onto a new indirect block entry %d::%d::%d\n", i, dir_inode.indirect_ptr[i], *indirect_blocks);
 			dir_inode.vstat.st_blocks += 2;
 			add_new_direc(&dirent_dblock, fname, name_len, 0, f_ino, *indirect_blocks);
@@ -711,6 +723,19 @@ static int rufs_mkdir(const char *path, mode_t mode) {
     }
 
     int f_no = get_avail_ino();
+    if (f_no == -1) {
+        free(base_m);
+        free(parent_m);
+        return -ENOSPC;
+    }
+
+    int new_dir_entry = get_avail_blkno();
+    if (new_dir_entry == -1) {
+        free(base_m);
+        free(parent_m);
+        return -ENOSPC;
+    }
+
     log_msg("Attempting to add new dir, parent_ino::%d, dir_ino::%d, base::%s, base_len::%d\n", p_inode.ino, f_no, base, strlen(base));
     p_inode.link++; // ".." entry link added
     p_inode.vstat.st_nlink++;
@@ -718,10 +743,11 @@ static int rufs_mkdir(const char *path, mode_t mode) {
     if (result != 0) {
         free(base_m);
         free(parent_m);
+        unset_bitmap(block_bm, new_dir_entry - s_block->d_start_blk);
         return result == -ENOSPC ? -ENOSPC : -EISDIR;
     }
 
-    add_dir_entry(f_no, p_inode.ino, get_avail_blkno(), mode);
+    add_dir_entry(f_no, p_inode.ino, new_dir_entry, mode);
     free(base_m);
     free(parent_m);
     return 0;
@@ -801,6 +827,12 @@ static int rufs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     }
 
 	int f_no = get_avail_ino();
+	if (f_no == -1) {
+        free(base_m);
+        free(parent_m);
+        return -ENOSPC;
+    }
+
 	int result = dir_add(p_inode, f_no, base, strlen(base));
     if (result != 0) {
         free(base_m);
@@ -963,6 +995,11 @@ static int rufs_write(const char *path, const char *buffer, size_t size, off_t o
             memset(write_buffer, 0, BLOCK_SIZE);
 		}
 
+		if (p_inode.direct_ptr[i] == -1) {
+		    is_new = 0;
+		    break;
+		}
+
 		log_msg("Write onto direct block::%d\n", p_inode.direct_ptr[i]);
 		if (is_new) {
 	       bio_read(p_inode.direct_ptr[i], write_buffer);
@@ -1008,6 +1045,11 @@ static int rufs_write(const char *path, const char *buffer, size_t size, off_t o
 			is_new_ptr = 1;
 		}
 
+		if (p_inode.indirect_ptr[i] == -1) {
+		    is_new_ptr = 0;
+		    break;
+		}
+
 		log_msg("Write onto indirect block::%d\n", p_inode.indirect_ptr[i]);
 		if (!is_new_ptr) {
 		    bio_read(p_inode.indirect_ptr[i], indirect_blocks);
@@ -1022,6 +1064,11 @@ static int rufs_write(const char *path, const char *buffer, size_t size, off_t o
 				p_inode.vstat.st_blocks++;
 				memset(write_buffer, 0, BLOCK_SIZE);
 				l_is_new = is_new = 1;
+			}
+
+			if (*indirect_blocks == -1) {
+				l_is_new = is_new = 0;
+				break;
 			}
 
 			log_msg("Write onto indirect block %d at %d\n", p_inode.indirect_ptr[i], *indirect_blocks);

@@ -3,9 +3,15 @@ CFLAGS = -g -c -m32
 AR = ar -rc
 RANLIB = ranlib
 
+all: clean my_vm.a my_vm64.a
+
 my_vm.a: my_vm.o
-	$(AR) $@ $^
-	$(RANLIB) $@
+        $(AR) $@ $^
+        $(RANLIB) $@
+
+my_vm64.a: my_vm64.o
+        $(AR) $@ $^
+        $(RANLIB) $@
 
 clean:
-	rm -rf *.o *.a
+        rm -rf *.o *.a

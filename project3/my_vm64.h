@@ -10,62 +10,50 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-// Considering the address space of 32 bits, hence virtual memory size is 4GB
-//  Page size considered - 8KB
-
+#if INTPTR_MAX == INT64_MAX
 typedef uint64_t page_t;
+#else
+typedef uint32_t page_t;
+#endif
 
-// Max size of the virtual memory (256TB)
-#define MAX_MEMSIZE (1ULL << 48)
 
-// Physical memory size to simulate (16GB)
-#define MEMSIZE (1UL << 34)
-
-// Page size considered - (4kb)
-#define PAGE_SIZE (1UL << 12) // 2^12 Bytes
-
-#define PAGE_VS_LEVEL 9 // hardcoding this value for ease of use
-
-#define ADDRESS_BIT 32
-
-#define BYTES_TO_BITS 8
-
+#define VM_LEN 48
+#define PM_LEN 34
+#define MAX_MEMSIZE (1ULL << VM_LEN)
+#define MEMSIZE (1UL << PM_LEN)
+#define PG_LEN 12 // Has to be atleast 3 for now!!!
+#define PAGE_SIZE (1UL << PG_LEN)
+#define BYTES_SIZE 8
 #define FRAME_SIZE PAGE_SIZE
-
 #define PAGE_MEM_SIZE (PAGE_SIZE / sizeof(page_t))
-
 #define TLB_ENTRIES 512
+#define VPN_LEVELS 4
 
-// Structure to represent each page(aka frame) in memory
-typedef struct {
-  page_t page_array[PAGE_MEM_SIZE];
+#define PGFM_SET PAGE_SIZE
+#define PGFM_VALID (1UL << (PG_LEN - 1))
+
+typedef struct page {
+  page_t hunk[PAGE_MEM_SIZE];
 } page;
 
-// Structure for page bitmap
-// Each char in bits will have 1byte(storing 8 pages bitwise)
 typedef struct {
   unsigned char *bits;
   size_t num_bytes;
 } bitmap;
 
-// VM manager struct that is responsible for holding
-// all the necessary data for the system to function
-// Page directory is where outer table entries are stored
 typedef struct {
-  page *physical_memory;
-  bitmap *physical_bitmap;
-  bitmap *virtual_bitmap;
-  page *page_directory;
+  page *pm_mem;
+  bitmap *pm_bitmap;
+  bitmap *vm_bitmap;
+  page *page_dir;
+  page_t dir_index;
 } vm_manager;
 
-// For storing data related to virtual space for a process
 typedef struct {
-  page_t indices[4];
-  page_t outer_index;
-  page_t inner_index;
+  page_t indices[VPN_LEVELS];
   page_t offset;
-  page_t virtual_page_number;
-} virtual_page_data;
+  page_t vpn;
+} vp_data;
 
 typedef struct {
   page_t vpn;
@@ -73,10 +61,10 @@ typedef struct {
 } tlb_data;
 
 typedef struct {
-  tlb_data lookup_table[TLB_ENTRIES];
-  int tlb_lookup;
-  int tlb_misses;
-  int tlb_hits;
+  tlb_data table[TLB_ENTRIES];
+  int count;
+  int miss;
+  int hit;
 } tlb_lookup;
 
 void initialize_vm();
@@ -95,13 +83,13 @@ void assign_virtual_page_bits();
 
 void set_physical_mem();
 
-void get_virtual_data(page_t vp, virtual_page_data *vir_page_data);
+void read_vpn_data(page_t vm_page, vp_data *vpn_data);
 
 void *translate(page_t vp);
 
-void page_map(page_t vp, page_t pf);
+void page_map(page_t vm_page, page_t pm_frame);
 
-page_t get_next_avail(int no_of_pages);
+int get_next_avail(int page_cnt, page_t *start_page);
 
 void *t_malloc(size_t n);
 

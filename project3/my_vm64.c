@@ -1,47 +1,45 @@
 #include "my_vm64.h"
 #include <string.h>
 
-// TODO: Define static variables and structs, include headers, etc
-bool init = false;
+bool init_vm = false;
 
-vm_manager memory_manager;
+vm_manager mem_manager;
 tlb_lookup mem_lookup;
 
-// Total number of virtual pages
-unsigned long long total_virtual_pages = (MAX_MEMSIZE) / (PAGE_SIZE);
+page_t total_virtual_pages = MAX_MEMSIZE/PAGE_SIZE;
+page_t total_physical_pages = MEMSIZE/PAGE_SIZE;
+page_t next_page_ref = (MEMSIZE/PAGE_SIZE) - 1;
 
-// Total of physical pages
-unsigned long total_physical_pages = (MEMSIZE) / (PAGE_SIZE);
+int *vpn_bits = 0;
+page_t *vpn_pages = 0;
 
-int offset_bits = 0;
-int virtual_page_bits = 0;
-
-/*
-  This function initializes the virtual address bits, which will be
-  utilized to layout the virtual memory address and map with
-  its physical counter
- */
-void assign_virtual_page_bits() {
-  offset_bits = log2(PAGE_SIZE);
-
-  virtual_page_bits = (ADDRESS_BIT - offset_bits);
+void init_vbits() {
+  int full_vpn_len = VM_LEN - PG_LEN;
+  int add_bit = (full_vpn_len % VPN_LEVELS);
+  int vpn_len = full_vpn_len / VPN_LEVELS;
+  page_t frame_cnt = (1 << vpn_len);
+  page_t page_req = (frame_cnt/PAGE_MEM_SIZE) + ((frame_cnt%PAGE_MEM_SIZE) ? 1 : 0);
+  vpn_bits = malloc(sizeof(int)*VPN_LEVELS);
+  vpn_pages = malloc(sizeof(page_t)*VPN_LEVELS);
+  for (int i = 0; i < VPN_LEVELS; i++) {
+    if ((i == (VPN_LEVELS - 1)) && add_bit) {
+      vpn_len += add_bit; // adding trailing bit(s)
+      frame_cnt = (1 << vpn_len);
+      page_req = (frame_cnt/PAGE_MEM_SIZE) + ((frame_cnt%PAGE_MEM_SIZE) ? 1 : 0);
+    }
+    vpn_bits[i] = vpn_len;
+    vpn_pages[i] = page_req;
+  }
 }
 
-/*
-  The method takes the pointer to bit_map pointer (address of the bitmap
-  pointer), to allocate memory for virtual and physical page wise. The
-  total_pages varies for both the space.
- */
 void bitmap_init(bitmap **bit_map, size_t total_pages) {
-
   *bit_map = (bitmap *)malloc(sizeof(bitmap));
 
   if (bit_map == NULL) {
     fprintf(stderr, "Memory allocation failed\n");
     exit(EXIT_FAILURE);
   }
-
-  (*bit_map)->num_bytes = total_pages / BYTES_TO_BITS;
+  (*bit_map)->num_bytes = total_pages / BYTES_SIZE;
   (*bit_map)->bits = calloc((*bit_map)->num_bytes, sizeof(unsigned char));
 
   if ((*bit_map)->bits == NULL) {
@@ -49,349 +47,251 @@ void bitmap_init(bitmap **bit_map, size_t total_pages) {
     fprintf(stderr, "Memory allocation failed\n");
     exit(EXIT_FAILURE);
   }
-
   memset((*bit_map)->bits, 0, (*bit_map)->num_bytes);
 }
 
-/*
-  The following methods are crucial to memory availability by performing
-  bit operations over page bitmaps. Everytime memory is allocated/deallocated,
-  these functions are executed to ensure the memory availability is intact
- */
 static void set_bit_at_index(bitmap *bit_map, int bit_index) {
-  bit_map->bits[bit_index / BYTES_TO_BITS] |=
-      (1 << (bit_index % BYTES_TO_BITS));
+    bit_map->bits[bit_index / BYTES_SIZE] |=
+        (1 << (bit_index % BYTES_SIZE));
 }
 
 static int get_bit_at_index(bitmap *bit_map, int bit_index) {
-  return (bit_map->bits[bit_index / 8] & (1 << (bit_index % 8))) != 0;
+  return (bit_map->bits[bit_index / 8] & (1 << (bit_index % 8))) > 0;
 }
 
 static void reset_bit_at_index(bitmap *bit_map, int bit_index) {
   bit_map->bits[bit_index / 8] &= ~(1 << (bit_index % 8));
 }
-/* Ends here*/
 
-/*
-  Outer page directory that maps outer level index to its
-  inner level counterpart is initiated in the last page of the
-  physical memory.
- */
 void init_page_directories() {
+  int i = 0;
+  mem_manager.dir_index = next_page_ref;
+  for (int level = 0; level < VPN_LEVELS; level++) {
+    page_t page_req = vpn_pages[level];
+    for (page_t index = next_page_ref; index > (next_page_ref - page_req); index--, i++) {
+      set_bit_at_index(mem_manager.pm_bitmap, index);
+      memset(mem_manager.pm_mem[index].hunk, PGFM_SET, PAGE_MEM_SIZE);
 
-  int bit_index = (total_physical_pages - 1);
-
-  set_bit_at_index(memory_manager.physical_bitmap, bit_index);
-
-  memory_manager.page_directory = &memory_manager.physical_memory[bit_index];
-  page_t *page_dr_array = (memory_manager.page_directory)->page_array;
-  for (int i = 0; i < (1 << PAGE_VS_LEVEL); i++) {
-    page_dr_array[i] = -1;
+      if (level > 0) {
+        *mem_manager.pm_mem[next_page_ref].hunk |= ((index << PG_LEN) | PGFM_VALID);
+      }
+    }
+    next_page_ref -= page_req;
   }
 }
 
 void reset_tlb_data(int pos) {
-  mem_lookup.lookup_table[pos].vpn = -1;
-  mem_lookup.lookup_table[pos].pfn = -1;
+  mem_lookup.table[pos].vpn = 0;
+  mem_lookup.table[pos].pfn = 0;
 }
 
 void init_tlb() {
-  mem_lookup.tlb_lookup = mem_lookup.tlb_hits = mem_lookup.tlb_misses = 0;
+  mem_lookup.count = mem_lookup.hit = mem_lookup.miss = 0;
   for (int i = 0; i < TLB_ENTRIES; i++) {
     reset_tlb_data(i);
   }
 }
 
-/*
-  Init method for the VM system
- */
 void initialize_vm() {
-
-  if (init == true) {
+  if (init_vm) {
     return;
   }
-
-  assign_virtual_page_bits();
+  init_vbits();
   set_physical_mem();
   init_tlb();
   init_page_directories();
-
-  init = true;
+  init_vm = true;
 }
 
-/*
-  Allocates memory for physical space, and the bitmaps for virtual and
-  the physical pages
- */
 void set_physical_mem() {
+  mem_manager.pm_mem = (page *)malloc(MEMSIZE);
 
-  memory_manager.physical_memory = (page *)malloc(MEMSIZE);
-
-  if (memory_manager.physical_memory == NULL) {
+  if (mem_manager.pm_mem == NULL) {
     fprintf(stderr, "Physical Memory allocation failed\n");
     exit(EXIT_FAILURE);
   }
-
-  bitmap_init(&memory_manager.physical_bitmap, total_physical_pages);
-
-  bitmap_init(&memory_manager.virtual_bitmap, total_virtual_pages);
+  bitmap_init(&mem_manager.pm_bitmap, total_physical_pages);
+  bitmap_init(&mem_manager.vm_bitmap, total_virtual_pages);
 }
 
-// Need changes here
-/*
-  Crucial in computing the data for a given virtual address,
-  Deriving inner, outer index, offset and virtual page number
-  Which will be resourceful for page_map and translate methods
- */
-void get_virtual_data(page_t vp, virtual_page_data *vir_page_data) {
-  page_t offset_mask = (1 << offset_bits);
-  offset_mask -= 1;
-  page_t offset = vp & offset_mask;
-
-  page_t virtual_page_number = (vp >> offset_bits);
-  int inner_data = virtual_page_number;
-  vir_page_data->indices[3] = inner_data & PAGE_VS_LEVEL;
-  inner_data = inner_data >> PAGE_VS_LEVEL;
-  vir_page_data->indices[2] = inner_data & inner_data;
-  inner_data = inner_data >> PAGE_VS_LEVEL;
-  vir_page_data->indices[1] = inner_data & inner_data;
-  inner_data = inner_data >> PAGE_VS_LEVEL;
-  vir_page_data->indices[0] = inner_data & inner_data;
-  vir_page_data->virtual_page_number = virtual_page_number;
-  vir_page_data->offset = offset;
+void read_vpn_data(page_t vm_page, vp_data *vpn_data) {
+  page_t offset = (vm_page & (PAGE_SIZE - 1));
+  page_t vpn = (vm_page >> PG_LEN);
+  int inner_data = vpn;
+  for (int i = VPN_LEVELS - 1; i > -1; i--) {
+    vpn_data->indices[i] = inner_data & vpn_bits[i];
+    inner_data = inner_data >> vpn_bits[i];
+  }
+  vpn_data->vpn = vpn;
+  vpn_data->offset = offset;
 }
 
-/*
-  Takes the virtual address, looks up the page directory,
-  Finds the corresponding inner table that is mapped,
-  dereferences the physical address through inner index from the table
-  and returns
- */
 void *translate(page_t vp) {
-  page_t vpn = vp >> offset_bits;
+  page_t vpn = vp >> PG_LEN;
   page_t pfn = check_TLB(vpn);
+
   if (pfn != -1) {
-    page_t offset_mask = (1 << offset_bits);
-    offset_mask -= 1;
-    page_t offset = vp & offset_mask;
-    page_t physical_addr = pfn << offset_bits;
+    page_t offset = vp & (PAGE_SIZE - 1);
+    page_t physical_addr = pfn << PG_LEN;
     physical_addr += offset;
     return (void *)physical_addr;
   }
-
-  virtual_page_data virtual_data;
-  get_virtual_data(vp, &virtual_data);
-
-  int bit = get_bit_at_index(memory_manager.virtual_bitmap,
-                             virtual_data.virtual_page_number);
+  vp_data virtual_data;
+  read_vpn_data(vp, &virtual_data);
+  int bit = get_bit_at_index(mem_manager.vm_bitmap,
+                             virtual_data.vpn);
 
   if (bit != 1) {
     return NULL;
   }
-
   page_t *second_level =
-      memory_manager.page_directory + virtual_data.indices[0];
-  page_t *second_level_addr = &memory_manager.physical_memory[*second_level];
+      mem_manager.page_dir + virtual_data.indices[0];
+  page_t *second_level_addr = &mem_manager.pm_mem[*second_level];
   page_t *third_level = second_level_addr + virtual_data.indices[1];
-  page_t *third_level_addr = &memory_manager.physical_memory[*third_level];
+  page_t *third_level_addr = &mem_manager.pm_mem[*third_level];
   page_t *fourth_level = third_level_addr + virtual_data.indices[2];
-  page_t *fourth_level_addr = &memory_manager.physical_memory[*fourth_level];
+  page_t *fourth_level_addr = &mem_manager.pm_mem[*fourth_level];
   page_t *page_table = fourth_level_addr + virtual_data.indices[3];
-  add_TLB(virtual_data.virtual_page_number, *page_table);
+  add_TLB(virtual_data.vpn, *page_table);
   page_t physical_address =
-      ((*page_table << offset_bits) + virtual_data.offset);
-
+      ((*page_table << PG_LEN) + virtual_data.offset);
   return (void *)physical_address;
 }
 
-/*
-   Called in t_malloc(), to map the physical and the virtual address,
-   by making an entry in the page table(s). From virtual_data method, we
-   find out the page directory entry, map a new inner table if not already
-   present Reference the physical address into the inner table index.
- */
-void page_map(page_t vp, page_t pf) {
+void page_map(page_t vm_page, page_t pm_frame) {
+  vp_data vpn_data;
+  page_t dir_indices = mem_manager.dir_index;
+  read_vpn_data(vm_page << PG_LEN, &vpn_data);
+  page_t *page_dir;
+  int level = 0;
+  for(; level < VPN_LEVELS; level++) {
+    page_t index = vpn_data.indices[level];
 
-  virtual_page_data virtual_data;
-  get_virtual_data(vp, &virtual_data);
-
-  page_t physical_frame_number = pf >> offset_bits;
-  page_t *page_directory_entry = memory_manager.page_directory;
-
-  int i = 0;
-  while (i < 3) {
-    page_directory_entry = (page_directory_entry + virtual_data.indices[i]);
-    if (*page_directory_entry == -1) {
-
-      int last_page = total_physical_pages - 2;
-
-      while (last_page >= 0) {
-
-        int bit = get_bit_at_index(memory_manager.physical_bitmap, last_page);
-
-        if (bit == 0) {
-
-          set_bit_at_index(memory_manager.physical_bitmap, last_page);
-          *page_directory_entry = last_page;
-
-          break;
-        }
-
-        last_page--;
-      }
-
-      if (*page_directory_entry == -1) {
-        return;
-      }
+    if (index > PAGE_MEM_SIZE) {
+      dir_indices -= index/PAGE_MEM_SIZE;
+      index %= PAGE_MEM_SIZE;
     }
-    i++;
-  }
+    page_dir = mem_manager.pm_mem[dir_indices].hunk; // always contigious
+    page_dir += index;
+    page_t offset = (*page_dir & (PAGE_SIZE - 1));
 
-  page_t fourth_level = *page_directory_entry;
-
-  page_t *fourth_level_address = &memory_manager.physical_memory[fourth_level];
-
-  page_t *page_table_entry = (fourth_level_address + virtual_data.indices[3]);
-
-  *page_table_entry = physical_frame_number;
-
-  add_TLB(virtual_data.virtual_page_number, physical_frame_number);
-}
-
-/*
-   Parses through the virtual space, and tries to find contiguous memory
-   based on the no_of_pages which is required. Finds empty pages through
-   virtual bitmaps and returns the starting page of the page bundle.
- */
-page_t get_next_avail(int no_of_pages) {
-
-  int start_page, vp_y, vp_x = 0;
-  int page_count;
-
-  while (vp_x < total_virtual_pages) {
-
-    int bit = get_bit_at_index(memory_manager.virtual_bitmap, vp_x);
-
-    if (bit == 0) {
-
-      vp_y = vp_x + 1;
-      page_count = 1;
-
-      while (page_count < no_of_pages && vp_y < total_virtual_pages) {
-
-        bit = get_bit_at_index(memory_manager.virtual_bitmap, vp_y);
-        if (bit == 1) {
-          break;
+    // reuse memory if already valid
+    if (offset & PGFM_VALID) {
+      dir_indices = (*page_dir >> PG_LEN);
+    } else if (level == (VPN_LEVELS - 1)) {
+      *page_dir = (pm_frame << PG_LEN);
+      set_bit_at_index(mem_manager.vm_bitmap, vm_page);
+      set_bit_at_index(mem_manager.pm_bitmap, pm_frame);
+    } else {
+      page_t len = 0;
+      for (page_t pos = next_page_ref; pos >= 0 && len < vpn_pages[(VPN_LEVELS + 1)]; pos--, len++) {
+        if (get_bit_at_index(mem_manager.pm_bitmap, pos) == 0) {
+          if (len == 0) {
+            next_page_ref = pos;
+          }
         } else {
-          vp_y++;
-          page_count++;
+          len = 0;
         }
       }
-      if (page_count == no_of_pages) {
-        start_page = vp_x;
-        return start_page;
+      for (page_t pos = next_page_ref; pos < (next_page_ref - vpn_pages[VPN_LEVELS + 1]); pos--) {
+        set_bit_at_index(mem_manager.pm_bitmap, pos);
+        memset(mem_manager.pm_mem[pos].hunk, PGFM_SET, PAGE_MEM_SIZE);
       }
-      vp_x = vp_y;
-      continue;
+      *page_dir = ((next_page_ref << PG_LEN) | PGFM_VALID);
+      dir_indices = next_page_ref;
     }
-    vp_x++;
   }
-  return -1;
+  page_t index = vpn_data.indices[level];
+
+  if (index > PAGE_MEM_SIZE) {
+    dir_indices -= index/PAGE_MEM_SIZE;
+    index %= PAGE_MEM_SIZE;
+  }
+  page_dir = mem_manager.pm_mem[dir_indices].hunk; // always contigious
+  page_dir += index;
+  page_t last_level = *page_dir;
+  page_t *last_level_addr = mem_manager.pm_mem[last_level].hunk;
+  page_t *page_table_entry = (last_level_addr + vpn_data.indices[3]);
+  *page_table_entry = pm_frame;
+  add_TLB(vpn_data.vpn, pm_frame);
+  return;
 }
 
-/*
-   The memory allocator function:
-   Based on the size which is parsed, finds out the number of pages required.
-   Parses the physical memory for non-contiguous pages and virtual for
-   contiguous pages. Each corresponding page is allocated for the process
-   and page_map is called to map the VA and PA in the page tables. Finally it
-   returns the virtual_address that is being assigned.
- */
-void *t_malloc(size_t n) {
+int get_vm_start_page(int page_cnt, page_t *start_page) {
+  int frame_cnt = 1;
+  unsigned char *vm_bm = mem_manager.vm_bitmap->bits;
+  for (int index = 0; index < mem_manager.vm_bitmap->num_bytes && frame_cnt < page_cnt; index++, vm_bm++) {
+    int available = __builtin_ctz(~(*vm_bm));
 
-  initialize_vm();
-
-  int no_of_pages = n / (PAGE_SIZE);
-  int remainder_bytes = n % (PAGE_SIZE);
-
-  if (remainder_bytes > 0) {
-    no_of_pages++;
-  }
-
-  int i = 0;
-  // We are using this array to consider all the physical pages
-  int physical_frames[no_of_pages];
-  int frame_count = 0;
-
-  // Find the free pages in the physical memory
-  while (frame_count < no_of_pages && i < total_physical_pages) {
-    int bit = get_bit_at_index(memory_manager.physical_bitmap, i);
-    if (bit == 0) {
-      physical_frames[frame_count] = i;
-      frame_count++;
+    if (available < 8) {
+      int tmp_index = (index*8) + available;
+      for (; tmp_index < mem_manager.vm_bitmap->num_bytes && frame_cnt < page_cnt; tmp_index++, frame_cnt++) {
+        if (get_bit_at_index(mem_manager.vm_bitmap, tmp_index)) {
+          frame_cnt = 1; // if mem not contiguous, repeat
+          break;
+        }
+      }
     }
-    i++;
+
+    if (page_cnt == frame_cnt) {
+      *start_page = index;
+      return 1;
+    }
+  }
+  return 0;
+}
+
+void *t_malloc(size_t n) {
+  initialize_vm();
+  int page_cnt = n/PAGE_SIZE;
+
+  if ((n % PAGE_SIZE) > 0) {
+    page_cnt++;
+  }
+  int pm_frames[page_cnt];
+  int frame_cnt = 0;
+  unsigned char *pm_bm = mem_manager.pm_bitmap->bits;
+  for (int index = 0; index < mem_manager.pm_bitmap->num_bytes && frame_cnt < page_cnt; index++, pm_bm++) {
+    int available = __builtin_ctz(~(*pm_bm));
+
+    if (available < 8) {
+      for (int j_index = available; j_index < 8; j_index++) {
+        int frame = (index*8) + j_index;
+        if (get_bit_at_index(mem_manager.pm_bitmap, frame) == 0) {
+          pm_frames[frame_cnt] = frame;
+          frame_cnt++;
+        }
+      }
+    }
   }
 
-  // No physical memory is found
-  if (frame_count < no_of_pages) {
+  if (frame_cnt < page_cnt) {
+    return NULL; // insufficient memory available
+  }
+  page_t start_page = 0;
+
+  if (get_vm_start_page(page_cnt, &start_page) == 0) {
     return NULL;
   }
-
-  int start_page = get_next_avail(no_of_pages);
-
-  if (start_page == -1) {
-    return NULL;
+  frame_cnt = 0;
+  for (int index = start_page; index < (start_page + page_cnt); index++, frame_cnt++) {
+    page_map(index, pm_frames[frame_cnt]);
   }
-
-  frame_count = 0;
-
-  for (i = start_page; i < (start_page + no_of_pages); i++) {
-    page_t page_virtual_addr = i << offset_bits;
-    page_t frame_physical_addr = physical_frames[frame_count] << offset_bits;
-
-    page_map(page_virtual_addr, frame_physical_addr);
-
-    set_bit_at_index(memory_manager.virtual_bitmap, i);
-
-    set_bit_at_index(memory_manager.physical_bitmap,
-                     physical_frames[frame_count]);
-
-    frame_count++;
-  }
-
-  page_t virtual_address = start_page << offset_bits;
-
+  page_t virtual_address = start_page << PG_LEN;
   return (void *)virtual_address;
 }
 
-/*
-   Free memory allocation:
-   Takes the starting virtual address, and its size. Verifies if the virtual
-   memory is allocated prior, and for each page, finds out the corresponding
-   physical address from the page table using translate(). Using both VA and
-   PA, the memory is deallocated from the bitmaps respectively.
- */
 int t_free(page_t vp, size_t n) {
-
   int no_of_pages = n / (PAGE_SIZE);
   int remainder_bytes = n % (PAGE_SIZE);
 
   if (remainder_bytes > 0) {
     no_of_pages++;
   }
-
-  // Get the starting page from Virtual page/address
-  page_t start_page = vp >> offset_bits;
-
-  // NOTE: Ideally here, the offset should be stored especially when
-  // Fragmentation comes into picture, but since thats not the case
-  // we are not ignoring this.
-
+  page_t start_page = vp >> PG_LEN;
   bool valid_page = true;
-
   for (page_t i = start_page; i < (start_page + no_of_pages); i++) {
-    int bit = get_bit_at_index(memory_manager.virtual_bitmap, i);
+    int bit = get_bit_at_index(mem_manager.vm_bitmap, i);
     if (bit == 0) {
       valid_page = false;
       break;
@@ -401,40 +301,27 @@ int t_free(page_t vp, size_t n) {
   if (valid_page == false) {
     return -1;
   }
-
   page_t virt_addr, phy_addr, physical_page;
-
   for (page_t i = start_page; i < (start_page + no_of_pages); i++) {
-    virt_addr = (i << offset_bits);
-
+    virt_addr = (i << PG_LEN);
     phy_addr = translate(virt_addr);
-
-    physical_page = (phy_addr >> offset_bits);
-
-    reset_bit_at_index(memory_manager.virtual_bitmap, i);
-
-    reset_bit_at_index(memory_manager.physical_bitmap, physical_page);
-
+    physical_page = (phy_addr >> PG_LEN);
+    reset_bit_at_index(mem_manager.vm_bitmap, i);
+    reset_bit_at_index(mem_manager.pm_bitmap, physical_page);
     remove_TLB(i);
   }
 }
 
 int access_memory(page_t vp, void *val, size_t n, bool is_put) {
-  // Doing this to fetch/update data bytewise
   char *physical_address =
-      (char *)memory_manager.physical_memory[(page_t)translate(vp)].page_array;
-
+      (char *)mem_manager.pm_mem[(page_t)translate(vp)].hunk;
   char *virtual_address = (char *)vp;
   char *end_virt_address = virtual_address + n;
-
-  page_t vp_first = (page_t)virtual_address >> offset_bits;
-  page_t vp_last = (page_t)end_virt_address >> offset_bits;
-
+  page_t vp_first = (page_t)virtual_address >> PG_LEN;
+  page_t vp_last = (page_t)end_virt_address >> PG_LEN;
   char *value = (char *)val;
-
   for (page_t i = vp_first; i <= vp_last; i++) {
-
-    int bit = get_bit_at_index(memory_manager.virtual_bitmap, i);
+    int bit = get_bit_at_index(mem_manager.vm_bitmap, i);
 
     if (bit == 0) {
       return -1;
@@ -448,34 +335,28 @@ int access_memory(page_t vp, void *val, size_t n, bool is_put) {
     } else {
       *value = *physical_address;
     }
-
     value++;
     physical_address++;
     virtual_address++;
-
     page_t virt_addr = (page_t)virtual_address;
-
-    int outer_bits_mask = (1 << offset_bits);
+    int outer_bits_mask = (1 << PG_LEN);
     outer_bits_mask -= 1;
     int offset = virt_addr & outer_bits_mask;
 
     if (offset == 0) {
       physical_address =
-          (char *)memory_manager.physical_memory[(page_t)translate(virt_addr)]
-              .page_array;
+          (char *)mem_manager.pm_mem[(page_t)translate(virt_addr)]
+              .hunk;
     }
   }
-
   return 0;
 }
 
 int put_value(page_t vp, void *val, size_t n) {
-
   return access_memory(vp, val, n, true);
 }
 
 int get_value(page_t vp, void *dst, size_t n) {
-
   return access_memory(vp, dst, n, false);
 }
 
@@ -485,22 +366,15 @@ void mat_mult(page_t a, page_t b, page_t c, size_t l, size_t m, size_t n) {
   int value_size = sizeof(int);
 
   for (size_t i = 0; i < l; i++) {
-
     for (size_t j = 0; j < n; j++) {
-
       value_c = 0;
-
       for (size_t k = 0; k < m; k++) {
-
         address_b = b + (j * value_size) + ((k * n * value_size));
         address_a = a + (k * value_size) + ((i * m * value_size));
-
         get_value(address_b, &value_b, value_size);
         get_value(address_a, &value_a, value_size);
-
         value_c += value_a * value_b;
       }
-
       address_c = c + ((i * n * value_size)) + (j * value_size);
       put_value(address_c, &value_c, value_size);
     }
@@ -509,30 +383,40 @@ void mat_mult(page_t a, page_t b, page_t c, size_t l, size_t m, size_t n) {
 
 void add_TLB(page_t vpage, page_t ppage) {
   int pos = vpage % TLB_ENTRIES;
-  mem_lookup.lookup_table[pos].vpn = vpage;
-  mem_lookup.lookup_table[pos].pfn = ppage;
+  int vpn = vpage << PG_LEN;
+  int pfn = ppage << PG_LEN;
+  vpn |= (1 << (PG_LEN - 1)); // first bit from offset
+  pfn |= (1 << (PG_LEN - 1)); // first bit from offset
+  mem_lookup.table[pos].vpn = vpn;
+  mem_lookup.table[pos].pfn = pfn;
+}
+
+int is_vpage_exists(page_t vpage, int pos) {
+    int is_valid = ((mem_lookup.table[pos].vpn >> (PG_LEN - 1)) & 1);
+    return is_valid && ((mem_lookup.table[pos].vpn >> PG_LEN) == vpage);
 }
 
 int check_TLB(page_t vpage) {
   int pos = vpage % TLB_ENTRIES;
-  mem_lookup.tlb_lookup++;
+  mem_lookup.count++;
 
-  if (mem_lookup.lookup_table[pos].vpn == vpage) {
-    mem_lookup.tlb_hits++;
-    return mem_lookup.lookup_table[pos].pfn;
+  if (is_vpage_exists(vpage, pos)) {
+    mem_lookup.hit++;
   }
-  mem_lookup.tlb_misses++;
-  return -1;
+  mem_lookup.miss++;
+  return mem_lookup.table[pos].pfn;
 }
 
 int remove_TLB(page_t vpage) {
   int pos = vpage % TLB_ENTRIES;
-  if (mem_lookup.lookup_table[pos].vpn == vpage) {
+  int is_valid = ((mem_lookup.table[pos].vpn >> (PG_LEN - 1)) & 1);
+
+  if (is_vpage_exists(vpage, pos)) {
     reset_tlb_data(pos);
   }
 }
 
 void print_TLB_missrate() {
-  float miss_rate = mem_lookup.tlb_misses / mem_lookup.tlb_lookup;
+  float miss_rate = mem_lookup.miss / mem_lookup.count;
   printf("The TLB miss rate is, %.10f\n", miss_rate);
 }

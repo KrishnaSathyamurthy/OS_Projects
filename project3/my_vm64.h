@@ -45,7 +45,6 @@ typedef struct {
   page *pm_mem;
   bitmap *pm_bitmap;
   bitmap *vm_bitmap;
-  page *page_dir;
   page_t dir_index;
 } vm_manager;
 
@@ -85,7 +84,9 @@ void set_physical_mem();
 
 void read_vpn_data(page_t vm_page, vp_data *vpn_data);
 
-void *translate(page_t vp);
+void *translate(page_t vpn);
+
+void invalidate_pm(page_t vpn);
 
 void page_map(page_t vm_page, page_t pm_frame);
 

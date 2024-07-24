@@ -2,7 +2,6 @@
 #include <string.h>
 
 bool init_vm = false;
-
 vm_manager mem_manager;
 tlb_lookup mem_lookup;
 
@@ -51,8 +50,7 @@ void bitmap_init(bitmap **bit_map, size_t total_pages) {
 }
 
 static void set_bit_at_index(bitmap *bit_map, int bit_index) {
-    bit_map->bits[bit_index / BYTES_SIZE] |=
-        (1 << (bit_index % BYTES_SIZE));
+  bit_map->bits[bit_index / BYTES_SIZE] |= (1 << (bit_index % BYTES_SIZE));
 }
 
 static int get_bit_at_index(bitmap *bit_map, int bit_index) {
@@ -117,44 +115,74 @@ void set_physical_mem() {
 void read_vpn_data(page_t vm_page, vp_data *vpn_data) {
   page_t offset = (vm_page & (PAGE_SIZE - 1));
   page_t vpn = (vm_page >> PG_LEN);
-  int inner_data = vpn;
-  for (int i = VPN_LEVELS - 1; i > -1; i--) {
-    vpn_data->indices[i] = inner_data & vpn_bits[i];
-    inner_data = inner_data >> vpn_bits[i];
-  }
   vpn_data->vpn = vpn;
   vpn_data->offset = offset;
+  for (int i = VPN_LEVELS - 1; i > -1; i--) {
+    vpn_data->indices[i] = vpn & ((1 << vpn_bits[i]) - 1);
+    vpn = vpn >> vpn_bits[i];
+  }
 }
 
-void *translate(page_t vp) {
-  page_t vpn = vp >> PG_LEN;
-  page_t pfn = check_TLB(vpn);
+void invalidate_pm(page_t vpn) {
+  vp_data vpn_data;
+  read_vpn_data(vpn, &vpn_data);
 
-  if (pfn != -1) {
-    page_t offset = vp & (PAGE_SIZE - 1);
+  if (get_bit_at_index(mem_manager.vm_bitmap, vpn_data.vpn) == 0) {
+    return;
+  }
+  page_t dir_indices = mem_manager.dir_index;
+  page_t *page_dir;
+  int level = 0;
+  for(; level < VPN_LEVELS; level++) {
+    page_t index = vpn_data.indices[level];
+
+    if (index > PAGE_MEM_SIZE) {
+      dir_indices -= index/PAGE_MEM_SIZE;
+      index %= PAGE_MEM_SIZE;
+    }
+    page_dir = mem_manager.pm_mem[dir_indices].hunk; // always contigious
+    page_dir += index;
+    dir_indices = (*page_dir >> PG_LEN);
+    if (level == (VPN_LEVELS - 1)) {
+      *page_dir = 0; // invalidate the last level pm bit
+    }
+  }
+  reset_bit_at_index(mem_manager.vm_bitmap, vpn);
+  reset_bit_at_index(mem_manager.pm_bitmap, dir_indices);
+}
+
+void *translate(page_t vpn) {
+  page_t pfn = check_TLB((vpn >> PG_LEN));
+
+  if ((pfn & PGFM_VALID) > 0) {
+    page_t offset = vpn & (PAGE_SIZE - 1);
     page_t physical_addr = pfn << PG_LEN;
     physical_addr += offset;
     return (void *)physical_addr;
   }
-  vp_data virtual_data;
-  read_vpn_data(vp, &virtual_data);
-  int bit = get_bit_at_index(mem_manager.vm_bitmap,
-                             virtual_data.vpn);
+  vp_data vpn_data;
+  read_vpn_data(vpn, &vpn_data);
 
-  if (bit != 1) {
+  if (get_bit_at_index(mem_manager.vm_bitmap, vpn_data.vpn) == 0) {
     return NULL;
   }
-  page_t *second_level =
-      mem_manager.page_dir + virtual_data.indices[0];
-  page_t *second_level_addr = &mem_manager.pm_mem[*second_level];
-  page_t *third_level = second_level_addr + virtual_data.indices[1];
-  page_t *third_level_addr = &mem_manager.pm_mem[*third_level];
-  page_t *fourth_level = third_level_addr + virtual_data.indices[2];
-  page_t *fourth_level_addr = &mem_manager.pm_mem[*fourth_level];
-  page_t *page_table = fourth_level_addr + virtual_data.indices[3];
-  add_TLB(virtual_data.vpn, *page_table);
+  page_t dir_indices = mem_manager.dir_index;
+  page_t *page_dir;
+  int level = 0;
+  for(; level < VPN_LEVELS; level++) {
+    page_t index = vpn_data.indices[level];
+
+    if (index > PAGE_MEM_SIZE) {
+      dir_indices -= index/PAGE_MEM_SIZE;
+      index %= PAGE_MEM_SIZE;
+    }
+    page_dir = mem_manager.pm_mem[dir_indices].hunk; // always contigious
+    page_dir += index;
+    dir_indices = (*page_dir >> PG_LEN);
+  }
+  add_TLB(vpn, dir_indices);
   page_t physical_address =
-      ((*page_table << PG_LEN) + virtual_data.offset);
+      ((dir_indices << PG_LEN) + vpn_data.offset);
   return (void *)physical_address;
 }
 
@@ -179,7 +207,7 @@ void page_map(page_t vm_page, page_t pm_frame) {
     if (offset & PGFM_VALID) {
       dir_indices = (*page_dir >> PG_LEN);
     } else if (level == (VPN_LEVELS - 1)) {
-      *page_dir = (pm_frame << PG_LEN);
+      *page_dir = ((pm_frame << PG_LEN) | PGFM_VALID);
       set_bit_at_index(mem_manager.vm_bitmap, vm_page);
       set_bit_at_index(mem_manager.pm_bitmap, pm_frame);
     } else {
@@ -201,19 +229,7 @@ void page_map(page_t vm_page, page_t pm_frame) {
       dir_indices = next_page_ref;
     }
   }
-  page_t index = vpn_data.indices[level];
-
-  if (index > PAGE_MEM_SIZE) {
-    dir_indices -= index/PAGE_MEM_SIZE;
-    index %= PAGE_MEM_SIZE;
-  }
-  page_dir = mem_manager.pm_mem[dir_indices].hunk; // always contigious
-  page_dir += index;
-  page_t last_level = *page_dir;
-  page_t *last_level_addr = mem_manager.pm_mem[last_level].hunk;
-  page_t *page_table_entry = (last_level_addr + vpn_data.indices[3]);
-  *page_table_entry = pm_frame;
-  add_TLB(vpn_data.vpn, pm_frame);
+  add_TLB(vm_page, pm_frame);
   return;
 }
 
@@ -282,118 +298,112 @@ void *t_malloc(size_t n) {
 }
 
 int t_free(page_t vp, size_t n) {
-  int no_of_pages = n / (PAGE_SIZE);
-  int remainder_bytes = n % (PAGE_SIZE);
+  int page_cnt = n/PAGE_SIZE;
 
-  if (remainder_bytes > 0) {
-    no_of_pages++;
+  if ((n % PAGE_SIZE) > 0) {
+    page_cnt++;
   }
   page_t start_page = vp >> PG_LEN;
-  bool valid_page = true;
-  for (page_t i = start_page; i < (start_page + no_of_pages); i++) {
-    int bit = get_bit_at_index(mem_manager.vm_bitmap, i);
-    if (bit == 0) {
-      valid_page = false;
+  bool is_invalid = false;
+  for (page_t i = start_page; i < (start_page + page_cnt); i++) {
+    if (get_bit_at_index(mem_manager.vm_bitmap, i) == 0) {
+      is_invalid = true;
       break;
     }
   }
 
-  if (valid_page == false) {
+  if (is_invalid) {
     return -1;
   }
-  page_t virt_addr, phy_addr, physical_page;
-  for (page_t i = start_page; i < (start_page + no_of_pages); i++) {
-    virt_addr = (i << PG_LEN);
-    phy_addr = translate(virt_addr);
-    physical_page = (phy_addr >> PG_LEN);
-    reset_bit_at_index(mem_manager.vm_bitmap, i);
-    reset_bit_at_index(mem_manager.pm_bitmap, physical_page);
-    remove_TLB(i);
-  }
-}
-
-int access_memory(page_t vp, void *val, size_t n, bool is_put) {
-  char *physical_address =
-      (char *)mem_manager.pm_mem[(page_t)translate(vp)].hunk;
-  char *virtual_address = (char *)vp;
-  char *end_virt_address = virtual_address + n;
-  page_t vp_first = (page_t)virtual_address >> PG_LEN;
-  page_t vp_last = (page_t)end_virt_address >> PG_LEN;
-  char *value = (char *)val;
-  for (page_t i = vp_first; i <= vp_last; i++) {
-    int bit = get_bit_at_index(mem_manager.vm_bitmap, i);
-
-    if (bit == 0) {
-      return -1;
-    }
-  }
-
-  for (int i = 0; i < n; i++) {
-
-    if (is_put) {
-      *physical_address = *value;
-    } else {
-      *value = *physical_address;
-    }
-    value++;
-    physical_address++;
-    virtual_address++;
-    page_t virt_addr = (page_t)virtual_address;
-    int outer_bits_mask = (1 << PG_LEN);
-    outer_bits_mask -= 1;
-    int offset = virt_addr & outer_bits_mask;
-
-    if (offset == 0) {
-      physical_address =
-          (char *)mem_manager.pm_mem[(page_t)translate(virt_addr)]
-              .hunk;
-    }
+  for (page_t vpn = start_page; vpn < (start_page + page_cnt); vpn++) {
+    invalidate_pm(vpn);
+    remove_TLB(vpn);
   }
   return 0;
 }
 
-int put_value(page_t vp, void *val, size_t n) {
-  return access_memory(vp, val, n, true);
-}
+// int access_memory(page_t vp, void *val, size_t n, bool is_put) {
+//   char *physical_address =
+//       (char *)mem_manager.pm_mem[(page_t)translate(vp)].hunk;
+//   char *virtual_address = (char *)vp;
+//   char *end_virt_address = virtual_address + n;
+//   page_t vp_first = (page_t)virtual_address >> PG_LEN;
+//   page_t vp_last = (page_t)end_virt_address >> PG_LEN;
+//   char *value = (char *)val;
+//   for (page_t i = vp_first; i <= vp_last; i++) {
+//     int bit = get_bit_at_index(mem_manager.vm_bitmap, i);
 
-int get_value(page_t vp, void *dst, size_t n) {
-  return access_memory(vp, dst, n, false);
-}
+//     if (bit == 0) {
+//       return -1;
+//     }
+//   }
 
-void mat_mult(page_t a, page_t b, page_t c, size_t l, size_t m, size_t n) {
-  int value_a, value_b, value_c;
-  unsigned int address_a, address_b, address_c;
-  int value_size = sizeof(int);
+//   for (int i = 0; i < n; i++) {
 
-  for (size_t i = 0; i < l; i++) {
-    for (size_t j = 0; j < n; j++) {
-      value_c = 0;
-      for (size_t k = 0; k < m; k++) {
-        address_b = b + (j * value_size) + ((k * n * value_size));
-        address_a = a + (k * value_size) + ((i * m * value_size));
-        get_value(address_b, &value_b, value_size);
-        get_value(address_a, &value_a, value_size);
-        value_c += value_a * value_b;
-      }
-      address_c = c + ((i * n * value_size)) + (j * value_size);
-      put_value(address_c, &value_c, value_size);
-    }
-  }
-}
+//     if (is_put) {
+//       *physical_address = *value;
+//     } else {
+//       *value = *physical_address;
+//     }
+//     value++;
+//     physical_address++;
+//     virtual_address++;
+//     page_t virt_addr = (page_t)virtual_address;
+//     int outer_bits_mask = (1 << PG_LEN);
+//     outer_bits_mask -= 1;
+//     int offset = virt_addr & outer_bits_mask;
+
+//     if (offset == 0) {
+//       physical_address =
+//           (char *)mem_manager.pm_mem[(page_t)translate(virt_addr)]
+//               .hunk;
+//     }
+//   }
+//   return 0;
+// }
+
+// int put_value(page_t vp, void *val, size_t n) {
+//   return access_memory(vp, val, n, true);
+// }
+
+// int get_value(page_t vp, void *dst, size_t n) {
+//   return access_memory(vp, dst, n, false);
+// }
+
+// void mat_mult(page_t a, page_t b, page_t c, size_t l, size_t m, size_t n) {
+//   int value_a, value_b, value_c;
+//   unsigned int address_a, address_b, address_c;
+//   int value_size = sizeof(int);
+
+//   for (size_t i = 0; i < l; i++) {
+//     for (size_t j = 0; j < n; j++) {
+//       value_c = 0;
+//       for (size_t k = 0; k < m; k++) {
+//         address_b = b + (j * value_size) + ((k * n * value_size));
+//         address_a = a + (k * value_size) + ((i * m * value_size));
+//         get_value(address_b, &value_b, value_size);
+//         get_value(address_a, &value_a, value_size);
+//         value_c += value_a * value_b;
+//       }
+//       address_c = c + ((i * n * value_size)) + (j * value_size);
+//       put_value(address_c, &value_c, value_size);
+//     }
+//   }
+// }
 
 void add_TLB(page_t vpage, page_t ppage) {
   int pos = vpage % TLB_ENTRIES;
   int vpn = vpage << PG_LEN;
   int pfn = ppage << PG_LEN;
-  vpn |= (1 << (PG_LEN - 1)); // first bit from offset
-  pfn |= (1 << (PG_LEN - 1)); // first bit from offset
+  vpn |= PGFM_VALID; // first bit from offset
+  pfn |= PGFM_VALID; // first bit from offset
   mem_lookup.table[pos].vpn = vpn;
   mem_lookup.table[pos].pfn = pfn;
 }
 
 int is_vpage_exists(page_t vpage, int pos) {
-    int is_valid = ((mem_lookup.table[pos].vpn >> (PG_LEN - 1)) & 1);
-    return is_valid && ((mem_lookup.table[pos].vpn >> PG_LEN) == vpage);
+  int is_valid = (mem_lookup.table[pos].vpn & PGFM_VALID);
+  return (is_valid > 0) && ((mem_lookup.table[pos].vpn >> PG_LEN) == vpage);
 }
 
 int check_TLB(page_t vpage) {
@@ -402,18 +412,20 @@ int check_TLB(page_t vpage) {
 
   if (is_vpage_exists(vpage, pos)) {
     mem_lookup.hit++;
+  } else {
+    mem_lookup.miss++;
   }
-  mem_lookup.miss++;
   return mem_lookup.table[pos].pfn;
 }
 
 int remove_TLB(page_t vpage) {
   int pos = vpage % TLB_ENTRIES;
-  int is_valid = ((mem_lookup.table[pos].vpn >> (PG_LEN - 1)) & 1);
 
   if (is_vpage_exists(vpage, pos)) {
     reset_tlb_data(pos);
+    return 0;
   }
+  return -1;
 }
 
 void print_TLB_missrate() {

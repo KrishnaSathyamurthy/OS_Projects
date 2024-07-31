@@ -10,59 +10,55 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-// Considering the address space of 32 bits, hence virtual memory size is 4GB
-//  Page size considered - 8KB
-
+#if INTPTR_MAX == INT64_MAX
+typedef uint64_t page_t;
+#define VM_LEN 48
+#define PM_LEN 34
+#define PG_LEN 12
+#define VPN_LEVELS 4
+#else
 typedef uint32_t page_t;
+#define VM_LEN 32
+#define PM_LEN 30
+#define PG_LEN 8
+#define VPN_LEVELS 2
+#endif
 
-// Max size of the virtual memory (4GB)
-#define MAX_MEMSIZE (1ULL << 32)
-
-// Physical memory size to simulate (1GB)
-#define MEMSIZE (1UL << 30)
-
-// Page size considered - (8KB)
-#define PAGE_SIZE (1UL << 13) // 2^13 Bytes
-
-#define ADDRESS_BIT 32
-
-#define BYTES_TO_BITS 8
-
+#define MAX_MEMSIZE (1ULL << VM_LEN)
+#define MEMSIZE (1UL << PM_LEN)
+#define PAGE_SIZE (1UL << PG_LEN)
 #define FRAME_SIZE PAGE_SIZE
+#define PTR_ENTRY_SIZE sizeof(page_t)
+#define PAGE_MEM_SIZE (PAGE_SIZE / PTR_ENTRY_SIZE)
+#define TLB_ENTRIES 512
 
-#define PAGE_MEM_SIZE (PAGE_SIZE / sizeof(page_t)) // 2^11 entries
+#define PGFM_SET (1UL << (PG_LEN - 1))
+#define PGFM_VALID (1UL << (PG_LEN - 2))
 
-#define TLB_ENTRIES 256
-
-// Structure to represent each page(aka frame) in memory
-typedef struct {
-  page_t page_array[PAGE_MEM_SIZE];
+typedef struct page {
+  page_t hunk[PAGE_MEM_SIZE];
 } page;
 
-// Structure for page bitmap
-// Each char in bits will have 1byte(storing 8 pages bitwise)
 typedef struct {
   unsigned char *bits;
   size_t num_bytes;
 } bitmap;
 
-// VM manager struct that is responsible for holding
-// all the necessary data for the system to function
-// Page directory is where outer table entries are stored
 typedef struct {
-  page *physical_memory;
-  bitmap *physical_bitmap;
-  bitmap *virtual_bitmap;
-  page *page_directory;
+  // unsigned char *pm_mem; // TODO
+  page_t *pg_mem;
+  bitmap *pm_bitmap;
+  bitmap *vm_bitmap;
+  page_t dir_index;
+  page_t frames_free;
+  page_t page_frame_usage;
 } vm_manager;
 
-// For storing data related to virtual space for a process
 typedef struct {
-  page_t outer_index;
-  page_t inner_index;
+  page_t indices[VPN_LEVELS];
   page_t offset;
-  page_t virtual_page_number;
-} virtual_page_data;
+  page_t vpn;
+} vp_data;
 
 typedef struct {
   page_t vpn;
@@ -70,21 +66,23 @@ typedef struct {
 } tlb_data;
 
 typedef struct {
-  tlb_data lookup_table[TLB_ENTRIES];
-  int tlb_lookup;
-  int tlb_misses;
-  int tlb_hits;
+  tlb_data table[TLB_ENTRIES];
+  int count;
+  int miss;
+  int hit;
 } tlb_lookup;
 
 void initialize_vm();
 
 void bitmap_init(bitmap **bit_map, size_t total_pages);
 
-static void set_bit_at_index(bitmap *bit_map, int bit_index);
+static void set_bit_at_index(bitmap **bit_map, int bit_index);
 
 static int get_bit_at_index(bitmap *bit_map, int bit_index);
 
-static void reset_bit_at_index(bitmap *bit_map, int bit_index);
+static void reset_bit_at_index(bitmap **bit_map, int bit_index);
+
+void set_hunk(page_t *hunk);
 
 void init_page_directories();
 
@@ -92,25 +90,29 @@ void assign_virtual_page_bits();
 
 void set_physical_mem();
 
-void get_virtual_data(page_t vp, virtual_page_data *vir_page_data);
+void read_vpn_data(page_t vm_page, vp_data *vpn_data);
 
-void *translate(page_t vp);
+void *translate(page_t vpn);
 
-void page_map(page_t vp, page_t pf);
+void invalidate_pm(page_t vpn);
 
-page_t get_next_avail(int no_of_pages);
+void page_map(page_t vm_page, page_t pm_frame);
+
+int get_next_avail(int page_cnt, page_t *start_page);
 
 void *t_malloc(size_t n);
 
-int t_free(page_t vp, size_t n);
+int t_free(page_t vm_page, size_t n);
 
-int access_memory(page_t vp, void *val, size_t n, bool is_put);
+void copy_data(unsigned char *dest, const unsigned char *src, size_t n);
 
-int put_value(page_t vp, void *val, size_t n);
+int access_memory(page_t vm_page, void *val, size_t n, bool read);
 
-int get_value(page_t vp, void *dst, size_t n);
+int put_value(page_t vm_page, void *val, size_t n);
 
-void mat_mult(page_t a, page_t b, page_t c, size_t l, size_t m, size_t n);
+int get_value(page_t vm_page, void *val, size_t n);
+
+void mat_mult(page_t l, page_t r, page_t o, size_t col_l, size_t row_r, size_t common);
 
 void add_TLB(page_t vpage, page_t ppage);
 

@@ -1,17 +1,22 @@
+ifndef ARCHITECTURE
+   	$(error You must define the ARCHITECTURE)
+	ARCHITECTURE = 64
+endif
+
 CC = gcc
-CFLAGS = -g -c -m32
 AR = ar -rc
 RANLIB = ranlib
 
-all: clean my_vm.a my_vm64.a
+ifeq ($(ARCHITECTURE), 32)
+	CFLAGS = -m32
+endif
+CFLAGS += -g -c
+
+all: clean my_vm.a
 
 my_vm.a: my_vm.o
-        $(AR) $@ $^
-        $(RANLIB) $@
-
-my_vm64.a: my_vm64.o
-        $(AR) $@ $^
-        $(RANLIB) $@
+	$(AR) $@ $^
+	$(RANLIB) $@
 
 clean:
-        rm -rf *.o *.a
+	rm -rf *.o *.a

@@ -28,8 +28,8 @@ typedef uint32_t page_t;
 #define MEMSIZE (1UL << PM_LEN)
 #define PAGE_SIZE (1UL << PG_LEN)
 #define FRAME_SIZE PAGE_SIZE
-#define PTR_ENTRY_SIZE sizeof(page_t)
-#define PAGE_MEM_SIZE (PAGE_SIZE / PTR_ENTRY_SIZE)
+#define PG_PTR_SIZE sizeof(page_t)
+#define PAGE_MEM_SIZE (PAGE_SIZE / PG_PTR_SIZE)
 #define TLB_ENTRIES 512
 
 #define PGFM_SET (1UL << (PG_LEN - 1))
@@ -45,8 +45,7 @@ typedef struct {
 } bitmap;
 
 typedef struct {
-  // unsigned char *pm_mem; // TODO
-  page_t *pg_mem;
+  unsigned char *pg_mem;
   bitmap *pm_bitmap;
   bitmap *vm_bitmap;
   page_t dir_index;
@@ -82,7 +81,7 @@ static int get_bit_at_index(bitmap *bit_map, int bit_index);
 
 static void reset_bit_at_index(bitmap **bit_map, int bit_index);
 
-void set_hunk(page_t *hunk);
+void set_hunk(page_t *hunk, page_t data);
 
 void init_page_directories();
 
@@ -112,7 +111,8 @@ int put_value(page_t vm_page, void *val, size_t n);
 
 int get_value(page_t vm_page, void *val, size_t n);
 
-void mat_mult(page_t l, page_t r, page_t o, size_t col_l, size_t row_r, size_t common);
+void mat_mult(page_t l, page_t r, page_t o, size_t col_l, size_t row_r, size_t common, size_t val_size);
+// void mat_mult(page_t l, page_t r, page_t o, size_t col_l, size_t row_r, size_t common);
 
 void add_TLB(page_t vpage, page_t ppage);
 

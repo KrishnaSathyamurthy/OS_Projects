@@ -9,14 +9,18 @@
 
 typedef page_t data_var;
 
-#define MAX_RW_VALUE 10
-#define MAX_RW_TEST 10
-#define MAX_GRID 5
+#define MAX_RW_VALUE 1024*1024
+#define MAX_RW_TEST 1024
+#define MAX_GRID 64
+#define MAX_GRID_TEST 64
 #define VAL_SIZE sizeof(data_var) // since internal fragmentation is not handled, this makes it easier...
 
 int test_malloc() {
+  printf("Testing memory allocation and free\n");
   for (int i = 0; i < 1024; i++) {
+#ifdef DEBUG_TEST
     printf("%d\n", i);
+#endif
     size_t size = VAL_SIZE*(1024*1024*4)*(i+1);
     void *test = t_malloc(size);
     if (test == NULL) {
@@ -28,6 +32,7 @@ int test_malloc() {
     }
     t_free((page_t)test, size);
   }
+  printf("Testing memory allocation and free success\n");
   return 0;
 }
 
@@ -71,9 +76,10 @@ void test_rw_opr() {
     }
   }
   printf("Read/write operations were a success\n");
+  print_TLB_missrate();
 }
 
-void verify_mat_values(page_t mat_c, data_var *mat_z, int col, int row, const char *opr, int count) {
+int verify_mat_values(page_t mat_c, data_var *mat_z, int col, int row, const char *opr, int count) {
   page_t address_c;
   data_var value_c, value_z;
   for (size_t i = 0; i < col; i++) {
@@ -83,13 +89,14 @@ void verify_mat_values(page_t mat_c, data_var *mat_z, int col, int row, const ch
       get_value(address_c, &value_c, VAL_SIZE);
       if (value_c != value_z) {
         printf("%s operation failed during iteration %d, value at matrix[%ld][%ld]=%lld does not match with value obtained %lld\n", opr, count, i, j, value_z, value_c);
-        exit(-1);
+        return 1;
       }
     }
   }
+  return 0;
 }
 
-void check_and_fill_mat(page_t mat_m, data_var *mat_n, int col, int row, int count) {
+int check_and_fill_mat(page_t mat_m, data_var *mat_n, int col, int row, int count) {
   page_t address_m;
   data_var value;
   for (size_t i = 0; i < col; i++) {
@@ -101,7 +108,7 @@ void check_and_fill_mat(page_t mat_m, data_var *mat_n, int col, int row, int cou
     }
   }
 
-  verify_mat_values(mat_m, mat_n, col, row, "Matrix Init", count);
+  return verify_mat_values(mat_m, mat_n, col, row, "Matrix Init", count);
 }
 
 void mat_mult_page(data_var *l, data_var *r, data_var *o, size_t col_l, size_t row_r, size_t common) {
@@ -144,20 +151,20 @@ void print_t_mat(page_t mat, int col, int row) {
 }
 
 void print_t_mats(void *mat_a, void *mat_b, void *mat_c, int col, int row, int common) {
-  printf("Matrix A :: %dx%d\n", col, common);
+  printf("Matrix A %lld :: %dx%d\n", (page_t)mat_a, col, common);
   print_t_mat((page_t)mat_a, col, common);
-  printf("Matrix B :: %dx%d\n", common, row);
+  printf("Matrix B %lld :: %dx%d\n", (page_t)mat_b, common, row);
   print_t_mat((page_t)mat_b, common, row);
-  printf("Matrix C :: %dx%d\n", col, row);
+  printf("Matrix C %lld :: %dx%d\n", (page_t)mat_c, col, row);
   print_t_mat((page_t)mat_c, col, row);
 }
 
 void print_mats(data_var *mat_a, data_var *mat_b, data_var *mat_c, int col, int row, int common) {
-  printf("Matrix A :: %dx%d\n", col, common);
+  printf("Matrix X :: %dx%d\n", col, common);
   print_mat(mat_a, col, common);
-  printf("Matrix B :: %dx%d\n", common, row);
+  printf("Matrix Y :: %dx%d\n", common, row);
   print_mat(mat_b, common, row);
-  printf("Matrix C :: %dx%d\n", col, row);
+  printf("Matrix Z :: %dx%d\n", col, row);
   print_mat(mat_c, col, row);
 }
 #endif
@@ -170,37 +177,44 @@ void check_mat_mult(int col, int row, int count) {
   data_var *mat_x = (data_var*)malloc(VAL_SIZE*col*common);
   data_var *mat_y = (data_var*)malloc(VAL_SIZE*common*row);
   data_var *mat_z = (data_var*)malloc(VAL_SIZE*col*row);
-  check_and_fill_mat((page_t)mat_a, mat_x, col, common, count);
-  check_and_fill_mat((page_t)mat_b, mat_y, common, row, count);
-  mat_mult((page_t)mat_a, (page_t)mat_b, (page_t)mat_c, col, row, common);
+  int ret = 0;
+  ret |= check_and_fill_mat((page_t)mat_a, mat_x, col, common, count);
+  ret |= check_and_fill_mat((page_t)mat_b, mat_y, common, row, count);
+  mat_mult((page_t)mat_a, (page_t)mat_b, (page_t)mat_c, col, row, common, VAL_SIZE);
+  // mat_mult((page_t)mat_a, (page_t)mat_b, (page_t)mat_c, col, row, common);
   mat_mult_page(mat_x, mat_y, mat_z, col, row, common);
+  ret |= verify_mat_values((page_t)mat_c, mat_z, col, row, "Matrix Mult", count);
 #ifdef DEBUG_TEST
   print_t_mats(mat_a, mat_b, mat_c, col, row, common);
   print_mats(mat_x, mat_y, mat_z, col, row, common);
 #endif
-  verify_mat_values((page_t)mat_c, mat_z, col, row, "Matrix Mult", count);
   t_free((page_t)mat_a, VAL_SIZE*col*common);
   t_free((page_t)mat_b, VAL_SIZE*common*row);
   t_free((page_t)mat_c, VAL_SIZE*col*row);
   free(mat_x);
   free(mat_y);
   free(mat_z);
+
+  if (ret) {
+    exit(-1);
+  }
 }
 
 void test_mat_mult() {
   printf("Testing for matrix multiplication and related operations...\n");
   int count = 0;
-  for (int i = 1; i <= MAX_GRID; i++) {
-    for (int j = MAX_GRID; j > 0; j--) {
-      check_mat_mult(i, j, count++);
-    }
+  for (int i = 0; i < MAX_GRID_TEST; i++) {
+    int col = rand() % MAX_GRID + 1;
+    int row = rand() % MAX_GRID + 1;
+    check_mat_mult(col, row, count++);
   }
   printf("Matrix multiplication was a success\n");
+  print_TLB_missrate();
 }
 
 int main() {
   srand(time(NULL));
-  // test_malloc();
+  test_malloc();
   test_rw_opr();
   test_mat_mult();
   return 0;
